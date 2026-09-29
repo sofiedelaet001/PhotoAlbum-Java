@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Upgrade plan to migrate the Java application to the latest LTS versions",
+  "tasks": [
+    {
+      "type": "upgrade",
+      "id": "001-upgrade-java-spring-boot",
+      "description": "Upgrade the application to Java 25 and Spring Boot 4.x",
+      "reason": "Adopt the latest stable LTS Java release and compatible Spring platform versions for long-term support.",
+      "requirements": "Upgrade Java to 25, Spring Boot to 4.x, Spring Framework to 7.x, and migrate Java EE javax.* namespaces to Jakarta EE jakarta.* namespaces where required. Preserve application behavior and update build configuration, dependencies, source code, and tests for compatibility.",
+      "skills": [
+        {
+          "name": "java-version-upgrade",
+          "location": "builtin"
+        }
+      ],
+      "successCriteria": {
+        "passBuild": "true",
+        "passUnitTests": "true"
+      },
+      "status": "success",
+      "taskSummary": "Successfully upgraded PhotoAlbum-Java from Java 8 + Spring Boot 2.7.18 to Java 25 + Spring Boot 4.0.0 with Spring Framework 7.x. All code migrated to Jakarta EE namespaces, Spring Security updated to modern lambda DSL, 2 critical CVEs fixed, and 100% unit test pass rate achieved.",
+      "successCriteriaStatus": {
+        "passUnitTests": "true",
+        "passBuild": "true"
+      }
+    }
+  ],
+  "metadata": {
+    "planName": "upgrade-to-latest-lts",
+    "projectName": "application",
+    "language": "java",
+    "createdAt": "2026-09-29T13:17:46.308Z",
+    "version": "1.0"
+  }
+}

@@ -48,16 +48,15 @@ public class SecurityConfig {
             // Stateless HTTP Basic auth: credentials are sent per request, so a
             // session-based CSRF token is not applicable. CSRF is disabled to
             // keep this security fix minimal without breaking the JSON upload API.
-            .csrf().disable()
-            .sessionManagement().sessionCreationPolicy(SessionCreationPolicy.STATELESS)
-            .and()
-            .authorizeRequests()
+            .csrf(csrf -> csrf.disable())
+            .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+            .authorizeHttpRequests(authz -> authz
                 // Default deny for state-changing operations (CWE-862 / CWE-306).
-                .antMatchers(HttpMethod.POST, "/upload", "/detail/*/delete").authenticated()
+                .requestMatchers(HttpMethod.POST, "/upload", "/detail/*/delete").authenticated()
                 // Public, read-only photo gallery.
                 .anyRequest().permitAll()
-            .and()
-            .httpBasic();
+            )
+            .httpBasic(httpBasic -> {});
         return http.build();
     }
 }
