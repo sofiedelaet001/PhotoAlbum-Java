@@ -1,0 +1,134 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Photo Album cloud-readiness, Oracle-to-PostgreSQL migration, Azure infrastructure and deployment plan; no Java or Spring upgrade.",
+  "tasks": [
+    {
+      "type": "setupBaseline",
+      "id": "001-setupBaseline",
+      "description": "Capture a frozen Photo Album behavior and dependency baseline. Addresses issues: Oracle database found; Restricted configurations found; Server port configuration found.",
+      "requirements": "Snapshot src/main before changes and capture test cases, test data, and an infra-decision-table for Oracle-backed photo operations and deployment configuration. Use the snapshot independently of provisioning and code migration.",
+      "snapshotFolder": "src/main",
+      "skills": [
+        {
+          "name": "create-test-baseline",
+          "location": "project"
+        }
+      ],
+      "dependencies": []
+    },
+    {
+      "type": "infrastructure",
+      "id": "002-infrastructure",
+      "description": "Generate and provision infrastructure for the Photo Album app and Azure Database for PostgreSQL. Addresses issues: Oracle database found; Restricted configurations found; Server port configuration found.",
+      "requirements": "Provision Azure Container Apps hosting, image registry and Azure Database for PostgreSQL for this application. Confirm subscription, region, sizing and estimated costs before provisioning; do not store resource IDs, connection strings or credentials in this plan. Enable a secure way for the app to access the database.",
+      "iacType": "bicep",
+      "provision": true,
+      "skills": [
+        {
+          "name": "infrastructure-bicep-generation",
+          "location": "builtin"
+        }
+      ],
+      "dependencies": []
+    },
+    {
+      "type": "transform",
+      "id": "003-transform-oracle-to-postgresql",
+      "description": "Migrate the Oracle-backed Photo Album and its existing photo data to PostgreSQL. Addresses issues: Oracle database found; Password found in configuration file.",
+      "requirements": "Migrate the JDBC/database configuration, Oracle-specific entity types and queries, photo BLOB data, and local database setup to PostgreSQL while preserving gallery, upload, retrieval, pagination and deletion behavior. Use managed identity for Azure PostgreSQL database authentication where supported; do not commit database credentials. Preserve test isolation with H2.",
+      "skills": [
+        {
+          "name": "migration-oracle-to-postgresql",
+          "location": "builtin"
+        },
+        {
+          "name": "migration-mi-postgresql",
+          "location": "builtin"
+        }
+      ],
+      "successCriteria": {
+        "passBuild": "true",
+        "passUnitTests": "true"
+      },
+      "dependencies": []
+    },
+    {
+      "type": "transform",
+      "id": "004-transform-cloud-configuration",
+      "description": "Make Photo Album deployment configuration cloud-ready. Addresses issues: Restricted configurations found; Server port configuration found; Password found in configuration file.",
+      "requirements": "Allow the hosting environment to configure the server port while preserving a local default. Keep production credentials out of committed configuration, and distinguish test-only fixture credentials from production secrets. Do not change application functionality or re-upgrade Java or Spring.",
+      "successCriteria": {
+        "passBuild": "true",
+        "passUnitTests": "true"
+      },
+      "dependencies": [
+        "003-transform-oracle-to-postgresql"
+      ]
+    },
+    {
+      "type": "integrationTest",
+      "id": "005-integrationTest",
+      "description": "Build integration tests for migrated Azure services and run post-migration verification. Addresses issues: Oracle database found; Restricted configurations found; Server port configuration found; Password found in configuration file.",
+      "requirements": "Use the frozen baseline and its infra-decision-table in real mode with provisioned infrastructure. Verify photo storage and retrieval, database compatibility, credential handling, and cloud port configuration without embedding resource IDs or connection strings in the task plan.",
+      "skills": [
+        {
+          "name": "verify-test-baseline",
+          "location": "project"
+        }
+      ],
+      "dependencies": [
+        "001-setupBaseline",
+        "002-infrastructure",
+        "003-transform-oracle-to-postgresql",
+        "004-transform-cloud-configuration"
+      ]
+    },
+    {
+      "type": "security",
+      "id": "006-security",
+      "description": "Scan and remediate dependency CVEs before deployment. Addresses issues: Password found in configuration file (verify no production credentials are committed); no CVE finding was listed in the assessment.",
+      "requirements": "Scan project dependencies for known CVEs and upgrade vulnerable dependencies to the minimum patched versions. Document major-version breaking-change risks if unavoidable. Verify that production configuration contains no plaintext credentials and that the project builds and all tests pass; do not repeat the completed framework upgrade solely because of the old assessment.",
+      "skills": [
+        {
+          "name": "validate-cves-and-fix",
+          "location": "builtin"
+        }
+      ],
+      "successCriteria": {
+        "passBuild": "true",
+        "passUnitTests": "true"
+      },
+      "dependencies": [
+        "004-transform-cloud-configuration",
+        "005-integrationTest"
+      ]
+    },
+    {
+      "type": "deployment",
+      "id": "007-deployment",
+      "description": "Deploy Photo Album to Azure Container Apps. Addresses issues: Restricted configurations found; Server port configuration found; Oracle database found; Password found in configuration file.",
+      "requirements": "Package the existing Java 25/Spring Boot application with a compatible container build and runtime, deploy it to the provisioned Azure resources, connect securely to PostgreSQL, and verify the gallery and photo upload/download endpoints. Do not reuse the obsolete Java 8 Docker image or store deployment credentials in source.",
+      "targetAzureService": "azurecontainerapp",
+      "resourceStatus": "Use resources created by 002-infrastructure",
+      "deploymentTool": "bicep",
+      "skills": [
+        {
+          "name": "azcli-containerapp-deploy",
+          "location": "builtin"
+        }
+      ],
+      "dependencies": [
+        "002-infrastructure",
+        "005-integrationTest",
+        "006-security"
+      ]
+    }
+  ],
+  "metadata": {
+    "planName": "modernization-plan",
+    "projectName": "Photo Album",
+    "language": "java",
+    "createdAt": "2026-09-30T07:33:20Z",
+    "version": "1.0"
+  }
+}
