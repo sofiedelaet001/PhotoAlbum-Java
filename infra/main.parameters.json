@@ -1,0 +1,36 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "environmentName": {
+      "value": "photoalbum"
+    },
+    "location": {
+      "value": "eastus2"
+    },
+    "postgresLocation": {
+      "value": "eastus2"
+    },
+    "databaseName": {
+      "value": "photoalbum"
+    },
+    "postgresAdministratorLogin": {
+      "value": "pgadmin"
+    },
+    "postgresAdministratorLoginPassword": {
+      "value": ""
+    },
+    "entraAdminObjectId": {
+      "value": ""
+    },
+    "entraAdminName": {
+      "value": ""
+    },
+    "entraAdminType": {
+      "value": "User"
+    },
+    "targetPort": {
+      "value": 8080
+    }
+  }
+}
