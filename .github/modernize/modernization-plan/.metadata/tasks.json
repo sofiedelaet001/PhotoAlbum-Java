@@ -25,7 +25,8 @@
       "requirements": "Provision Azure Container Apps hosting, image registry and Azure Database for PostgreSQL for this application. Confirm subscription, region, sizing and estimated costs before provisioning; do not store resource IDs, connection strings or credentials in this plan. Enable a secure way for the app to access the database.",
       "iacType": "bicep",
       "provision": true,
-      "status": "started",
+      "status": "success",
+      "taskSummary": "Generated Bicep IaC under infra/ (main.bicep + 5 modules, parameters, deploy.ps1/deploy.sh, README, compliance and infra-config docs) and provisioned resource group rg-photoalbum in eastus2: Container Apps environment and app (port 8080), Azure Container Registry, PostgreSQL Flexible Server v17 (DB photoalbum, Entra auth enabled), user-assigned managed identity and Log Analytics. Service Connector link 'photoalbumdb' provides passwordless Spring Boot datasource configuration via user-assigned identity, so the app must not set SPRING_DATASOURCE_* env vars. Deviation: the AcrPull role assignment failed (signed-in principal lacks role-assignment rights) so image pull temporarily falls back to ACR admin credentials; documented in infra/compliance.md and re-runnable once User Access Administrator is granted. No secrets or resource IDs were committed.",
       "skills": [
         {
           "name": "infrastructure-bicep-generation",
@@ -53,6 +54,7 @@
         "passBuild": "true",
         "passUnitTests": "true"
       },
+      "status": "started",
       "dependencies": []
     },
     {
