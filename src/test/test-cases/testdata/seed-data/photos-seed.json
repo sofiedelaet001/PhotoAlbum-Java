@@ -1,0 +1,42 @@
+{
+  "description": "Three representative photo records seeded into the photos table before a test runs. photoDataFile is a path relative to test-cases/ whose raw bytes are loaded into the photo_data column. uploadedAt values are fixed so ordering and navigation assertions are deterministic.",
+  "table": "photos",
+  "records": [
+    {
+      "id": "11111111-1111-1111-1111-111111111111",
+      "originalFileName": "alpha.jpg",
+      "storedFileName": "11111111-1111-1111-1111-111111111111.jpg",
+      "filePath": "/uploads/11111111-1111-1111-1111-111111111111.jpg",
+      "fileSize": 790,
+      "mimeType": "image/jpeg",
+      "uploadedAt": "2024-01-01T10:00:00",
+      "width": 120,
+      "height": 80,
+      "photoDataFile": "testdata/seed-data/alpha.jpg"
+    },
+    {
+      "id": "22222222-2222-2222-2222-222222222222",
+      "originalFileName": "bravo.png",
+      "storedFileName": "22222222-2222-2222-2222-222222222222.png",
+      "filePath": "/uploads/22222222-2222-2222-2222-222222222222.png",
+      "fileSize": 229,
+      "mimeType": "image/png",
+      "uploadedAt": "2024-01-02T10:00:00",
+      "width": 64,
+      "height": 96,
+      "photoDataFile": "testdata/seed-data/bravo.png"
+    },
+    {
+      "id": "33333333-3333-3333-3333-333333333333",
+      "originalFileName": "charlie.gif",
+      "storedFileName": "33333333-3333-3333-3333-333333333333.gif",
+      "filePath": "/uploads/33333333-3333-3333-3333-333333333333.gif",
+      "fileSize": 92,
+      "mimeType": "image/gif",
+      "uploadedAt": "2024-01-03T10:00:00",
+      "width": 32,
+      "height": 32,
+      "photoDataFile": "testdata/seed-data/charlie.gif"
+    }
+  ]
+}

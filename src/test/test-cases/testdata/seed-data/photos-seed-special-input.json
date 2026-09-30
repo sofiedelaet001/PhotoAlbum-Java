@@ -1,0 +1,30 @@
+{
+  "description": "Two records exercising special-input rendering: a filename containing Unicode and HTML-significant characters, and a record with NULL width/height. Used by the gallery and detail rendering test cases.",
+  "table": "photos",
+  "records": [
+    {
+      "id": "55555555-5555-5555-5555-555555555555",
+      "originalFileName": "café-日本語-<script>&\"quoted\".png",
+      "storedFileName": "55555555-5555-5555-5555-555555555555.png",
+      "filePath": "/uploads/55555555-5555-5555-5555-555555555555.png",
+      "fileSize": 229,
+      "mimeType": "image/png",
+      "uploadedAt": "2024-02-01T10:00:00",
+      "width": 64,
+      "height": 96,
+      "photoDataFile": "testdata/seed-data/bravo.png"
+    },
+    {
+      "id": "66666666-6666-6666-6666-666666666666",
+      "originalFileName": "no-dimensions.jpg",
+      "storedFileName": "66666666-6666-6666-6666-666666666666.jpg",
+      "filePath": null,
+      "fileSize": 790,
+      "mimeType": "image/jpeg",
+      "uploadedAt": "2024-02-02T10:00:00",
+      "width": null,
+      "height": null,
+      "photoDataFile": "testdata/seed-data/alpha.jpg"
+    }
+  ]
+}

@@ -1,0 +1,10 @@
+{
+  "success": false,
+  "uploadedPhotos": [],
+  "failedUploads": [
+    {
+      "fileName": "empty-file.jpg",
+      "error": "File is empty."
+    }
+  ]
+}

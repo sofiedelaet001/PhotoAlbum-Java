@@ -1,0 +1,20 @@
+{
+  "success": true,
+  "uploadedPhotos": [
+    {
+      "id": "<uuid>",
+      "originalFileName": "sample-landscape.jpg",
+      "filePath": "<uploads-path>",
+      "uploadedAt": "<iso-local-date-time>",
+      "fileSize": 790,
+      "width": 120,
+      "height": 80
+    }
+  ],
+  "failedUploads": [
+    {
+      "fileName": "not-an-image.txt",
+      "error": "File type not supported. Please upload JPEG, PNG, GIF, or WebP images."
+    }
+  ]
+}

@@ -1,0 +1,18 @@
+{
+  "description": "A single photo row whose photo_data column is NULL. Used to pin down the behavior of GET /photo/{id} when metadata exists but no binary payload is stored.",
+  "table": "photos",
+  "records": [
+    {
+      "id": "44444444-4444-4444-4444-444444444444",
+      "originalFileName": "delta-no-data.jpg",
+      "storedFileName": "44444444-4444-4444-4444-444444444444.jpg",
+      "filePath": "/uploads/44444444-4444-4444-4444-444444444444.jpg",
+      "fileSize": 790,
+      "mimeType": "image/jpeg",
+      "uploadedAt": "2024-01-04T10:00:00",
+      "width": 120,
+      "height": 80,
+      "photoDataFile": null
+    }
+  ]
+}

@@ -1,0 +1,15 @@
+{
+  "success": true,
+  "uploadedPhotos": [
+    {
+      "id": "<uuid>",
+      "originalFileName": "caf\u00e9-\u65e5\u672c\u8a9e-\u03a9.jpg",
+      "filePath": "<uploads-path>",
+      "uploadedAt": "<iso-local-date-time>",
+      "fileSize": 665,
+      "width": 48,
+      "height": 48
+    }
+  ],
+  "failedUploads": []
+}

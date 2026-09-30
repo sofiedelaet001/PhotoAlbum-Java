@@ -1,0 +1,1 @@
+This file is plain text and must be rejected by the upload endpoint.

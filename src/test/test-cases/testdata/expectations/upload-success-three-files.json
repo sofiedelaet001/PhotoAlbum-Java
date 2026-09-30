@@ -1,0 +1,33 @@
+{
+  "success": true,
+  "uploadedPhotos": [
+    {
+      "id": "<uuid>",
+      "originalFileName": "sample-landscape.jpg",
+      "filePath": "<uploads-path>",
+      "uploadedAt": "<iso-local-date-time>",
+      "fileSize": 790,
+      "width": 120,
+      "height": 80
+    },
+    {
+      "id": "<uuid>",
+      "originalFileName": "sample-portrait.png",
+      "filePath": "<uploads-path>",
+      "uploadedAt": "<iso-local-date-time>",
+      "fileSize": 233,
+      "width": 64,
+      "height": 96
+    },
+    {
+      "id": "<uuid>",
+      "originalFileName": "sample-square.gif",
+      "filePath": "<uploads-path>",
+      "uploadedAt": "<iso-local-date-time>",
+      "fileSize": 92,
+      "width": 32,
+      "height": 32
+    }
+  ],
+  "failedUploads": []
+}

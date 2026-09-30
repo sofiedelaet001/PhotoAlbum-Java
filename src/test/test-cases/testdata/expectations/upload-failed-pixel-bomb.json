@@ -1,0 +1,10 @@
+{
+  "success": false,
+  "uploadedPhotos": [],
+  "failedUploads": [
+    {
+      "fileName": "pixel-bomb-10000x5000.jpg",
+      "error": "Image dimensions exceed the allowed limit."
+    }
+  ]
+}

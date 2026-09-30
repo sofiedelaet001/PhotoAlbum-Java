@@ -1,0 +1,10 @@
+{
+  "success": false,
+  "uploadedPhotos": [],
+  "failedUploads": [
+    {
+      "fileName": "sample-landscape.jpg",
+      "error": "Error saving photo to database. Please try again."
+    }
+  ]
+}
