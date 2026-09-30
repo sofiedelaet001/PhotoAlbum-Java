@@ -8,6 +8,8 @@
       "description": "Capture a frozen Photo Album behavior and dependency baseline. Addresses issues: Oracle database found; Restricted configurations found; Server port configuration found.",
       "requirements": "Snapshot src/main before changes and capture test cases, test data, and an infra-decision-table for Oracle-backed photo operations and deployment configuration. Use the snapshot independently of provisioning and code migration.",
       "snapshotFolder": "src/main",
+      "status": "success",
+      "taskSummary": "Captured the frozen behavior baseline under src/test/test-cases/: 32 test cases (TC-WEB-001..032) across 6 entry points, 30 fixture files (inputs, expectations, seed-data, configuration), and an infra-decision-table. No production source under src/main was modified. Both datastore rows in the infra-decision-table are currently 'mock' (infra-missing) because provisioning happens in task 002; a re-freeze is required before Phase 3 verification to flip PostgreSQL to real/managed-identity.",
       "skills": [
         {
           "name": "create-test-baseline",
@@ -23,6 +25,7 @@
       "requirements": "Provision Azure Container Apps hosting, image registry and Azure Database for PostgreSQL for this application. Confirm subscription, region, sizing and estimated costs before provisioning; do not store resource IDs, connection strings or credentials in this plan. Enable a secure way for the app to access the database.",
       "iacType": "bicep",
       "provision": true,
+      "status": "started",
       "skills": [
         {
           "name": "infrastructure-bicep-generation",
