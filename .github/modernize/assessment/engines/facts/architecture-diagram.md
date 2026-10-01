@@ -1,112 +1,123 @@
 # Architecture Diagram
 
-Photo Album is a monolithic Spring Boot 2.7 web application that lets users browse, upload, view, and delete photos, with binary image data persisted directly as BLOBs in an Oracle database.
+Photo Album is a single Spring Boot web application for browsing, uploading, and deleting photos. It renders gallery and detail pages with Thymeleaf and stores photo metadata and image bytes in PostgreSQL.
 
 ## Application Architecture
 
 ```mermaid
 flowchart TD
-    subgraph Client["Client Layer"]
-        Browser["Web Browser"]
+    subgraph AClient["Client Layer"]
+        ABrowser["Web browser"]
+        AJs["Upload JavaScript"]
     end
-    subgraph App["Application Layer - Spring Boot 2.7 (Java 8)"]
-        Web["Spring MVC Controllers"]
-        Thymeleaf["Thymeleaf Templates"]
-        Security["Spring Security - HTTP Basic Auth"]
-        Service["PhotoService - Business Logic"]
-        ImageIO["ImageIO - Dimension Extraction"]
+    subgraph AApp["Application Layer - Spring Boot 4.0.0 on Java 25"]
+        ASecurity["Spring Security HTTP Basic"]
+        AWeb["Spring MVC controllers"]
+        AViews["Thymeleaf templates"]
+        AService["Photo service and image validation"]
+        AAzure["Spring Cloud Azure JDBC authentication"]
     end
-    subgraph Data["Data Layer"]
-        JPA["Spring Data JPA - Hibernate"]
-        DB[("Oracle Database Free 23ai\nPHOTOS table incl. BLOB data")]
+    subgraph AData["Data Layer"]
+        AJpa["Spring Data JPA and Hibernate"]
+        APostgres[("PostgreSQL 17 - photos table and image bytes")]
     end
-    subgraph Infra["Deployment"]
-        Docker["Docker Container - photoalbum-java-app"]
-        Compose["Docker Compose"]
+    subgraph AExternal["External Services"]
+        AAssets["jsDelivr Bootstrap 5.3.0"]
+        AIdentity["Microsoft Entra ID"]
     end
 
-    Browser -->|"HTTP requests"| Web
-    Web -->|"renders"| Thymeleaf -->|"HTML response"| Browser
-    Web --> Security -->|"authorized state changes"| Service
-    Service -->|"validates + extracts dimensions"| ImageIO
-    Service -->|"CRUD via repository"| JPA
-    JPA -->|"native SQL / JDBC (ojdbc8)"| DB
-    Docker -->|"packages"| App
-    Compose -->|"orchestrates"| Docker
-    Compose -->|"orchestrates"| DB
+    ABrowser -->|"HTTP page and image requests"| ASecurity
+    AJs -->|"multipart upload requests"| ASecurity
+    ASecurity -->|"authorize requests"| AWeb
+    AWeb -->|"render pages"| AViews
+    AViews -->|"HTML response"| ABrowser
+    ABrowser -->|"load CSS and JavaScript"| AAssets
+    AWeb -->|"gallery detail upload and delete"| AService
+    AService -->|"photo CRUD"| AJpa
+    AJpa -->|"JDBC SQL and bytea data"| APostgres
+    AJpa -->|"Azure JDBC connection authentication"| AAzure
+    AAzure -->|"request database access token in Azure"| AIdentity
+    AIdentity -->|"access token"| AAzure
+    AAzure -->|"passwordless JDBC authentication in Azure"| APostgres
 ```
 
 ### Technology Stack Summary
 
 | Layer | Technology | Version | Purpose |
-|-------|-----------|---------|---------|
-| Presentation | Thymeleaf | Spring Boot 2.7 starter | Server-side HTML templating for gallery and detail views |
-| Web/API | Spring MVC | Spring Boot 2.7.18 | REST/MVC controllers for pages, upload API, and file serving |
-| Security | Spring Security | Spring Boot 2.7 starter | Stateless HTTP Basic auth protecting upload/delete endpoints |
-| Business Logic | Spring Service beans | Spring Boot 2.7 | Photo validation, upload processing, navigation logic |
-| Image Processing | javax.imageio (ImageIO) | JDK 8 | Reads image header/dimensions without full decode (DoS mitigation) |
-| Data Access | Spring Data JPA / Hibernate | Spring Boot 2.7 starter | Entity mapping and native Oracle-specific queries |
-| Database Driver | Oracle JDBC (ojdbc8) | runtime dependency | Connectivity to Oracle database |
-| Database | Oracle Database Free 23ai | gvenzl/oracle-free:latest (Docker) | Stores photo metadata and BLOB image data |
-| Runtime | Java | 1.8 | Application language/runtime target |
-| Containerization | Docker / Docker Compose | - | Packages app and orchestrates it with the Oracle DB service |
+| --- | --- | --- | --- |
+| Runtime | Java and Spring Boot | Java 25; Spring Boot 4.0.0 | Run the web application |
+| Presentation | Spring MVC and Thymeleaf | Managed by Spring Boot 4.0.0 | Handle HTTP routes and render gallery and detail pages |
+| Browser | Vanilla JavaScript and Bootstrap | JavaScript version not specified; Bootstrap 5.3.0 | Submit uploads with Fetch and style pages |
+| Security | Spring Security | Managed by Spring Boot 4.0.0 | Require HTTP Basic authentication for upload and delete while allowing reads |
+| Business logic | PhotoService and PhotoServiceImpl | Application 1.0.0 | Validate images and coordinate photo operations |
+| Data access | Spring Data JPA, Hibernate and PostgreSQL JDBC | Managed by Spring Boot 4.0.0 | Persist and query photo entities |
+| Storage | PostgreSQL | 17 in Docker Compose | Store photo metadata and bytes in the `photos` table |
+| Azure authentication | Spring Cloud Azure JDBC PostgreSQL and Microsoft Entra ID | Spring Cloud Azure 7.4.0 | Authenticate to Azure Database for PostgreSQL without an application password |
 
 ### Data Storage & External Services
 
-The application uses a single Oracle Database (23ai Free edition, run via the `gvenzl/oracle-free` Docker image) as its only persistent store. Photo binary content, metadata (filename, size, MIME type, dimensions), and upload timestamps are all stored in one `PHOTOS` table, with the raw image bytes kept as a `BLOB` column rather than on the filesystem or in external object storage. There are no other external service integrations (no email, message queues, or third-party APIs); Docker Compose wires the app container to the Oracle container over an internal bridge network, with the app waiting on the database's health check before starting.
+PostgreSQL stores metadata and image bytes in the `photos` table, with the image content mapped to a `bytea` column; stored file paths are compatibility metadata, not an active file store. Docker Compose uses a persistent PostgreSQL 17 volume and password authentication; the default configuration targets Azure Database for PostgreSQL with Microsoft Entra managed identity and passwordless JDBC authentication. Browsers load Bootstrap from jsDelivr. No cache, message broker, object storage service, or other application API is configured.
 
 ### Key Architectural Decisions
 
-- **Database-backed BLOB storage** instead of filesystem storage means photos are fully contained in Oracle, simplifying backup/restore but coupling image serving performance to database I/O.
-- **Oracle-specific native queries** (ROWNUM pagination, `TO_CHAR`, analytic `RANK()`/`SUM() OVER`) are used directly in `PhotoRepository`, tying the data layer tightly to Oracle SQL dialect and complicating a future database migration.
-- **Stateless security model**: Spring Security enforces HTTP Basic auth only on state-changing endpoints (upload/delete) with CSRF disabled and no server-side sessions, while the gallery itself remains publicly readable.
+- Controllers inject the `PhotoService` interface; its transactional implementation uses a Spring Data JPA repository with native PostgreSQL queries for chronological browsing.
+- Gallery and detail pages are server-rendered, while upload JavaScript submits multipart requests to a JSON-returning controller; a separate controller serves image bytes by ID.
+- A stateless Spring Security filter chain allows public reads and requires HTTP Basic authentication for upload and delete, using an in-memory admin account configured from environment properties.
 
 ## Component Relationships
 
 ```mermaid
 flowchart LR
-    subgraph Presentation
-        HomeCtrl["HomeController"]
-        DetailCtrl["DetailController"]
-        FileCtrl["PhotoFileController"]
+    subgraph CPresentation["Presentation"]
+        CUploadJs["upload.js"]
+        CTemplates["index and detail Thymeleaf templates"]
+        CHome["HomeController"]
+        CDetail["DetailController"]
+        CFile["PhotoFileController"]
     end
-    subgraph Business["Business Logic"]
-        PhotoSvcIface["PhotoService (interface)"]
-        PhotoSvcImpl["PhotoServiceImpl"]
+    subgraph CBusiness["Business Logic"]
+        CService["PhotoService"]
+        CImpl["PhotoServiceImpl"]
+        CResult["UploadResult"]
     end
-    subgraph DataAccess["Data Access"]
-        PhotoRepo["PhotoRepository (Spring Data JPA)"]
-        PhotoEntity["Photo (JPA Entity)"]
+    subgraph CData["Data Access"]
+        CRepo["PhotoRepository"]
+        CPhoto["Photo entity"]
     end
-    subgraph Infra["Infrastructure / Cross-cutting"]
-        SecurityCfg["SecurityConfig - SecurityFilterChain"]
-        UploadResult["UploadResult (DTO)"]
-        MathUtil["MathUtil"]
+    subgraph CInfra["Infrastructure"]
+        CSecurity["SecurityConfig filter chain"]
+        CUsers["InMemoryUserDetailsManager"]
     end
 
-    HomeCtrl -->|"list photos, handle upload"| PhotoSvcIface
-    DetailCtrl -->|"get photo, prev/next"| PhotoSvcIface
-    FileCtrl -->|"get photo bytes"| PhotoSvcIface
-    PhotoSvcIface -.->|"implemented by"| PhotoSvcImpl
-    PhotoSvcImpl -->|"validates + returns"| UploadResult
-    PhotoSvcImpl -->|"CRUD + native queries"| PhotoRepo
-    PhotoRepo -->|"maps rows to"| PhotoEntity
-    PhotoSvcImpl -->|"reads/writes"| PhotoEntity
-    SecurityCfg -.->|"intercepts POST /upload, /detail/*/delete"| HomeCtrl
-    SecurityCfg -.->|"intercepts POST /upload, /detail/*/delete"| DetailCtrl
+    CUploadJs -->|"multipart POST"| CHome
+    CHome -->|"render gallery"| CTemplates
+    CDetail -->|"render detail"| CTemplates
+    CTemplates -->|"request image route"| CFile
+    CHome -->|"photo operations"| CService
+    CDetail -->|"photo and navigation operations"| CService
+    CFile -->|"retrieve photo"| CService
+    CService -->|"implemented by"| CImpl
+    CImpl -->|"query save and delete"| CRepo
+    CRepo -->|"maps"| CPhoto
+    CImpl -->|"returns upload status"| CResult
+    CSecurity -->|"authenticates against"| CUsers
+    CSecurity -.->|"guards upload"| CHome
+    CSecurity -.->|"guards delete"| CDetail
 ```
 
 ### Component Inventory
 
 | Component | Layer | Type | Responsibility |
-|-----------|-------|------|-----------------|
-| HomeController | Presentation | MVC Controller | Renders gallery page and handles multi-file photo uploads |
-| DetailController | Presentation | MVC Controller | Renders single photo detail view with prev/next navigation and handles delete |
-| PhotoFileController | Presentation | REST Controller | Serves raw photo bytes from the database BLOB by ID |
-| PhotoService | Business Logic | Service Interface | Defines contract for photo retrieval, upload, deletion, and navigation |
-| PhotoServiceImpl | Business Logic | Service Implementation | Validates uploads, extracts image dimensions safely, orchestrates persistence |
-| PhotoRepository | Data Access | Spring Data JPA Repository | Executes Oracle-specific native SQL queries (ordering, pagination, stats, navigation) |
-| Photo | Data Access | JPA Entity | Maps to `PHOTOS` table; holds metadata and BLOB image data |
-| UploadResult | Infrastructure | DTO | Carries success/failure state and error messages for upload operations |
-| SecurityConfig | Infrastructure | Security Configuration | Configures stateless HTTP Basic auth restricting upload/delete endpoints |
-| MathUtil | Infrastructure | Utility | Helper utility class supporting business logic |
+| --- | --- | --- | --- |
+| `index.html`, `detail.html` | Presentation | Thymeleaf templates | Display gallery, photo detail, navigation, and delete form; request photo URLs |
+| `upload.js` | Presentation | Browser script | Validate selected files and submit multipart uploads using Fetch |
+| `HomeController` | Presentation | MVC controller | Render gallery and return JSON upload results |
+| `DetailController` | Presentation | MVC controller | Render photo details and handle deletion |
+| `PhotoFileController` | Presentation | MVC controller | Return photo bytes and content type by ID |
+| `PhotoService` | Business Logic | Service interface | Define listing, lookup, upload, navigation, and deletion operations |
+| `PhotoServiceImpl` | Business Logic | Transactional service | Validate file size and MIME type, read image dimensions, and coordinate persistence |
+| `UploadResult` | Business Logic | Result object | Carry per-file upload status, photo ID, and error details |
+| `PhotoRepository` | Data Access | Spring Data JPA repository | Provide CRUD and native PostgreSQL queries |
+| `Photo` | Data Access | JPA entity | Map the `photos` table, including metadata and binary image data |
+| `SecurityConfig` | Infrastructure | Security configuration | Configure stateless HTTP Basic, authorization rules, and password encoding |
+| `InMemoryUserDetailsManager` | Infrastructure | User store | Hold the configured admin account with a BCrypt-encoded password |

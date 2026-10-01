@@ -1,154 +1,168 @@
 # Configuration & Externalized Settings Inventory
 
-The application has a small, single-module Spring Boot configuration footprint: three property files (base, docker, test profiles), one Docker Compose environment definition, and a `.env` file for local secrets — no config server, Vault, or feature-flag framework is present.
+Three Spring properties files, Docker Compose with a local dotenv template, and Azure Bicep/deployment scripts supply configuration. Local Docker uses externally supplied passwords, Azure's database connection is intended to use a managed identity, and tests have separate overrides.
 
 ## Configuration Sources
 
 | Source | Type | Path/Location | Notes |
 |---|---|---|---|
-| `application.properties` | Spring Boot properties | `src/main/resources/application.properties` | Default profile; used for local (non-docker) run, targets Oracle at `oracle-db:1521/FREEPDB1` |
-| `application-docker.properties` | Spring Boot properties (profile-specific) | `src/main/resources/application-docker.properties` | Activated via `SPRING_PROFILES_ACTIVE=docker` in Docker Compose |
-| `application-test.properties` | Spring Boot properties (profile-specific) | `src/test/resources/application-test.properties` | Used during Maven test phase; switches to H2 in-memory DB |
-| `docker-compose.yml` | Docker Compose environment | repo root | Defines `oracle-db` and `photoalbum-java-app` services, injects env vars into the app container |
-| `.env.example` | Environment variable template | repo root | Documents required `.env` keys (`ORACLE_PASSWORD`, `APP_USER`, `APP_USER_PASSWORD`, `APP_ADMIN_USERNAME`, `APP_ADMIN_PASSWORD`); actual `.env` is git-ignored |
-| `oracle-init/*.sql`, `oracle-init/create-user.sh` | DB init scripts | `oracle-init/` | Run by the Oracle container's `container-entrypoint-initdb.d` mechanism to create the app schema user |
-| `azure-setup.ps1` / `azure-reset.ps1` | Deployment scripts | repo root | Provision/tear down Azure resources (not application runtime config, but externalizes deployment-time settings) |
+| Base settings | Spring properties | `src/main/resources/application.properties` | Loaded for all profiles; environment placeholders and no database password. |
+| Docker overrides | Spring profile properties | `src/main/resources/application-docker.properties` | Loaded with `docker`; requires a datasource password. |
+| Test overrides | Spring profile properties | `src/test/resources/application-test.properties` | Only on the test classpath with `test`. |
+| Local service configuration | Compose / host environment | `docker-compose.yml` | Interpolates host or `.env` variables, sets container environments and mounts `postgres-init/01-init-schema.sh` for first initialization. |
+| Local secret template | Dotenv template | `.env.example` | Copy to git-ignored `.env` and replace placeholders; do not commit actual credentials. |
+| Azure infrastructure | Bicep and ARM parameters | `infra/main.bicep`, `infra/modules/{containerapp,containerregistry,identity,loganalytics,postgresql}.bicep`, `infra/parameters.json`, `infra/main.parameters.json` | Defines resource defaults, runtime environment and secure admin-password parameter. JSON files contain empty placeholders for sensitive values. |
+| Azure provisioning | CLI scripts / process environment | `infra/deploy.sh`, `infra/deploy.ps1` | Pass parameters to Bicep and create the `photoalbumdb` passwordless Service Connector unless skipped. |
+| Separate legacy provisioning | PowerShell / generated dotenv | `azure-setup.ps1` | Separate password-based Azure setup; emits local connection variables, not the Container Apps managed-identity deployment. |
+| Azure runtime injection | Service Connector | Container App connection `photoalbumdb` | Intended to inject datasource URL, username, passwordless setting and managed-identity settings; not hard-coded in Bicep. |
+| Registry secret (conditional) | Container Apps secret | `infra/modules/containerapp.bicep` | `acr-password` exists only when the `AcrPull` role assignment is disabled. |
 
-No Spring Cloud Config, Azure App Configuration, HashiCorp Vault, or AWS Secrets Manager integration was found — all secrets are handled via plain environment variables passed through Docker Compose.
+No `bootstrap.*` file, Spring Cloud Config Git repository, external configuration server, Key Vault/Vault/AWS Secrets Manager integration, Kubernetes ConfigMap/Secret, or actual `.env` file is present in the inspected workspace.
 
 ## Build Profiles
 
 | Profile | Activation | Purpose | Key Dependencies/Plugins |
 |---|---|---|---|
-| (none defined) | N/A | The `pom.xml` defines no Maven `<profiles>`. A single build configuration is used for all builds. | `spring-boot-maven-plugin` (repackages jar); Java 8 source/target (`maven.compiler.source/target=8`) |
-| Docker multi-stage build | Automatic (`docker build` / `docker compose build`) | Stage 1 compiles with Maven+JDK8 (`mvn clean package -DskipTests`); Stage 2 copies the jar into a slim JRE 8 runtime image | `maven:3.9.6-eclipse-temurin-8` (build stage), `eclipse-temurin:8-jre` (runtime stage) |
+| Default Maven build | Automatic, e.g. `mvn package` | Build Java 25 executable JAR | Spring Boot parent and Maven plugin `4.0.0`; Spring Cloud Azure BOM `7.4.0`; web, Thymeleaf, JPA, security, validation, PostgreSQL/Azure JDBC and test dependencies. |
+| Container build invocation (not a Maven profile) | `docker build` or `docker compose up --build` | Package the app without running tests | Dockerfile runs `mvn clean package -DskipTests` using Maven 3.9.6/Temurin 8, then Temurin 8 JRE. **These Java 8 images are incompatible with the POM's Java 25 target/Spring Boot 4.** |
+
+`pom.xml` has no Maven `<profiles>`; `docker` and `test` are Spring **runtime** profiles. `-DskipTests` is a build option, not a profile.
 
 ## Runtime Profiles
 
 | Profile | Activation Method | Config Files | Key Overrides |
 |---|---|---|---|
-| default (no profile) | No `SPRING_PROFILES_ACTIVE` set (local/manual run) | `application.properties` | `spring.jpa.show-sql=true`; DEBUG logging for `com.photoalbum` and `org.springframework.web` |
-| `docker` | `SPRING_PROFILES_ACTIVE=docker` set in `docker-compose.yml` for `photoalbum-java-app` | `application-docker.properties` (merged with `application.properties`) | Logging lowered to INFO/WARN, `org.hibernate.SQL=DEBUG` added; datasource URL/credentials sourced from container env vars |
-| `test` | Activated by Maven Surefire during `mvn test` (Spring Boot Test convention, `@ActiveProfiles("test")` or `spring.profiles.active=test` in test context) | `application-test.properties` | Switches datasource to H2 in-memory (`jdbc:h2:mem:testdb`), `ddl-auto=create-drop`, adds `app.admin.username`/`app.admin.password` test values, sets `app.file-upload.upload-path=target/test-uploads` |
+| Default | No active Spring profile; Azure Service Connector can inject runtime settings | `application.properties` | PostgreSQL/Entra passwordless defaults, JPA `update`, application/web logging `DEBUG`. Requires externally supplied `app.admin.password`. |
+| `docker` | Compose `SPRING_PROFILES_ACTIVE=docker`, or explicitly select the profile for a local run | Base + `application-docker.properties` | Password-based PostgreSQL, passwordless `false`, JPA `create`, changed logging. |
+| `test` | `@ActiveProfiles("test")` on integration test classes | Base + test-classpath `application-test.properties` | H2, JPA `create-drop`, test-only admin credentials and upload-path setting. |
 
-Profiles are not combined (only one active profile at a time); no `@Profile`-annotated beans were found in the codebase.
+Spring can activate multiple comma-separated profiles, but no composed activation, `spring.profiles.active` in a properties file, or `@Profile` component is defined. `AZURE_CLIENT_ID` does not activate a Spring profile.
 
 ## Properties Inventory
 
-### Server & Web
+**Spring application.** Defaults below are packaged values or placeholder fallbacks, not claims about the value injected at runtime. Spring's environment/property sources can override packaged properties; active profile files override the base file. `required` means no fallback; sensitive values are masked.
 
-| Property Key | Default | Profiles | Source |
+| Property Key | Default / Type | Profiles / Overrides | Source |
 |---|---|---|---|
-| `server.port` | `8080` | all | static value |
-| `server.servlet.encoding.charset` | `UTF-8` | all | static value |
-| `server.servlet.encoding.enabled` | `true` | all | static value |
-| `server.servlet.encoding.force` | `true` | all | static value |
-| `spring.servlet.multipart.max-file-size` | `10MB` | default, docker | static value |
-| `spring.servlet.multipart.max-request-size` | `50MB` | default, docker | static value |
+| `server.port` | `8080` (TCP port) | Docker repeats `8080`; Azure sets `SERVER_PORT` to `targetPort` | Base, Docker, Bicep |
+| `server.servlet.encoding.charset` | `UTF-8` (charset) | Docker repeats | Base, Docker |
+| `server.servlet.encoding.enabled` | `true` (boolean) | Docker repeats | Base, Docker |
+| `server.servlet.encoding.force` | `true` (boolean) | Docker repeats | Base, Docker |
+| `spring.datasource.url` | `${SPRING_DATASOURCE_URL:jdbc:postgresql://postgres-db:5432/photoalbum}` (JDBC URL) | Docker repeats; test `jdbc:h2:mem:testdb`; Azure Service Connector injects URL | Base, Docker, test, Service Connector |
+| `spring.datasource.username` | `${SPRING_DATASOURCE_USERNAME:photoalbum}` (string) | Docker repeats; test `sa`; Azure Service Connector injects username | Base, Docker, test, Service Connector |
+| `spring.datasource.password` | Absent in base (sensitive string) | Docker requires `${SPRING_DATASOURCE_PASSWORD}`; test sets empty; Azure uses token-based authentication | Docker, test |
+| `spring.datasource.driver-class-name` | `org.postgresql.Driver` (class) | Docker repeats; test `org.h2.Driver` | Base, Docker, test |
+| `spring.datasource.azure.passwordless-enabled` | `${SPRING_DATASOURCE_AZURE_PASSWORDLESS_ENABLED:true}` (boolean) | Docker `false`; Azure Service Connector injects setting | Base, Docker, Service Connector |
+| `spring.cloud.azure.credential.managed-identity-enabled` | `${SPRING_CLOUD_AZURE_CREDENTIAL_MANAGED_IDENTITY_ENABLED:true}` (boolean) | Azure Service Connector injects setting | Base, Service Connector |
+| `spring.cloud.azure.credential.client-id` | `${SPRING_CLOUD_AZURE_CREDENTIAL_CLIENT_ID:}` (string, empty fallback) | Azure Service Connector supplies user-assigned identity; Bicep also sets `AZURE_CLIENT_ID` | Base, Service Connector, Bicep |
+| `spring.jpa.database-platform` | `org.hibernate.dialect.PostgreSQLDialect` (class) | Docker repeats; test `org.hibernate.dialect.H2Dialect` | Base, Docker, test |
+| `spring.jpa.hibernate.ddl-auto` | `${SPRING_JPA_HIBERNATE_DDL_AUTO:update}` (enum-like string) | Docker `create`; test `create-drop` | Base, Docker, test |
+| `spring.jpa.show-sql` | `true` (boolean) | Docker repeats; test `false` | Base, Docker, test |
+| `spring.jpa.properties.hibernate.format_sql` | `true` (boolean) | Docker repeats | Base, Docker |
+| `spring.servlet.multipart.max-file-size` | `10MB` (data size) | Docker repeats | Base, Docker |
+| `spring.servlet.multipart.max-request-size` | `50MB` (data size) | Docker repeats | Base, Docker |
+| `app.file-upload.max-file-size-bytes` | `10485760` (long, bytes) | Docker repeats twice; test repeats | Base, Docker, test |
+| `app.file-upload.allowed-mime-types` | `image/jpeg,image/png,image/gif,image/webp` (CSV strings) | Docker repeats twice; test repeats | Base, Docker, test |
+| `app.file-upload.max-files-per-upload` | `10` (integer) | Docker repeats twice; test repeats | Base, Docker, test |
+| `app.file-upload.upload-path` | Unset outside tests (path) | Test `target/test-uploads`; no production consumer identified | Test |
+| `app.admin.username` | `admin` (string, `@Value` fallback) | Compose `APP_ADMIN_USERNAME` defaults to `admin`; test sets `admin` | `SecurityConfig`, Compose, test |
+| `app.admin.password` | Required (sensitive string, `@Value` without fallback) | Compose requires `APP_ADMIN_PASSWORD`; test supplies a test-only value [MASKED]; Azure templates do not supply it | `SecurityConfig`, Compose, test |
+| `logging.level.com.photoalbum` | `DEBUG` (level) | Docker `INFO`; test `DEBUG` | Base, Docker, test |
+| `logging.level.org.springframework.web` | `DEBUG` (level) | Docker `WARN` | Base, Docker |
+| `logging.level.org.hibernate.SQL` | Unset | Docker `DEBUG` | Docker |
 
-### Database (Oracle / H2)
+The base file comments also describe optional, **not configured** service-principal keys `spring.cloud.azure.profile.tenant-id`, `spring.cloud.azure.credential.client-secret`, and `spring.cloud.azure.credential.client-id`, and sovereign-cloud keys `spring.cloud.azure.profile.cloud-type` and `spring.datasource.azure.scopes`. These are guidance, not active property assignments.
 
-| Property Key | Default | Profiles | Source |
+**Compose and local PostgreSQL.** Compose `${VAR:-fallback}` uses a host or `.env` value when present, while `${VAR:?message}` requires a nonempty value.
+
+| Property Key | Default / Type | Profiles / Overrides | Source |
 |---|---|---|---|
-| `spring.datasource.url` | `jdbc:oracle:thin:@oracle-db:1521/FREEPDB1` | default, docker | `${SPRING_DATASOURCE_URL:...}` placeholder, overridden by Docker Compose env var; test profile hardcodes H2 URL |
-| `spring.datasource.username` | `photoalbum` | default, docker | `${SPRING_DATASOURCE_USERNAME:...}` placeholder; test profile hardcodes `sa` |
-| `spring.datasource.password` | *(none — required)* | default, docker | `${SPRING_DATASOURCE_PASSWORD}` — no default, must be supplied via env var; test profile hardcodes empty string |
-| `spring.datasource.driver-class-name` | `oracle.jdbc.OracleDriver` | default, docker | static value; test profile uses `org.h2.Driver` |
-| `spring.jpa.database-platform` | `org.hibernate.dialect.OracleDialect` | default, docker | static value; test profile uses `H2Dialect` |
-| `spring.jpa.hibernate.ddl-auto` | `create` | default, docker | static value; test profile uses `create-drop` |
-| `spring.jpa.show-sql` | `true` | default, docker | static value; test profile sets `false` |
-| `spring.jpa.properties.hibernate.format_sql` | `true` | default, docker | static value (not set in test) |
+| `APP_DB_NAME` → `POSTGRES_DB`, JDBC database name | `photoalbum` (string) | Local Compose | Compose, `.env.example` |
+| `POSTGRES_ADMIN_USER` → `POSTGRES_USER` | `postgres` (string) | Local Compose | Compose, `.env.example` |
+| `POSTGRES_ADMIN_PASSWORD` → `POSTGRES_PASSWORD` | Required [MASKED] | Local database bootstrap | Compose, `.env.example` |
+| `APP_USER` → `APP_USER`, `SPRING_DATASOURCE_USERNAME` | `photoalbum` (string) | Local init and app | Compose, `.env.example`, `postgres-init/01-init-schema.sh` |
+| `APP_USER_PASSWORD` → `APP_USER_PASSWORD`, `SPRING_DATASOURCE_PASSWORD` | Required [MASKED] | Local init and app | Compose, `.env.example`, init script |
+| `APP_ADMIN_USERNAME` → `APP_ADMIN_USERNAME` | `admin` (string) | Local app | Compose, `.env.example` |
+| `APP_ADMIN_PASSWORD` → `APP_ADMIN_PASSWORD` | Required [MASKED] | Local app | Compose, `.env.example` |
+| `SPRING_DATASOURCE_URL` | `jdbc:postgresql://postgres-db:5432/${APP_DB_NAME:-photoalbum}` | Local app | Compose |
 
-### Application-Specific (File Upload)
+**Azure deployment inputs** (deployment configuration, not packaged Spring properties):
 
-| Property Key | Default | Profiles | Source |
+| Property Key | Default / Type | Profiles / Overrides | Source |
 |---|---|---|---|
-| `app.file-upload.max-file-size-bytes` | `10485760` (10MB) | all | static value; injected via `@Value` into `PhotoServiceImpl` |
-| `app.file-upload.allowed-mime-types` | `image/jpeg,image/png,image/gif,image/webp` | all | static value; injected via `@Value` as `String[]` |
-| `app.file-upload.max-files-per-upload` | `10` | all | static value (present in properties but no `@Value` usage found in code) |
-| `app.file-upload.upload-path` | `target/test-uploads` | test only | test-only property; no equivalent found in default/docker profiles |
+| `AZURE_SUBSCRIPTION_ID`, `AZURE_RESOURCE_GROUP` | Current Azure CLI subscription, `rg-photoalbum` | Deployment scripts | `infra/deploy.*` |
+| `AZURE_LOCATION`, `AZURE_POSTGRES_LOCATION`, `AZURE_ENV_NAME` | `eastus2`, `eastus2`, `photoalbum` | Scripts override Bicep defaults; parameter JSON also sets `eastus2` | `infra/deploy.*`, `infra/main.bicep`, parameter JSON |
+| `AZURE_POSTGRES_DATABASE_NAME`, `AZURE_TARGET_PORT` | `photoalbum`, `8080` | Bash script; PowerShell has corresponding fixed defaults | `infra/deploy.sh`, `infra/deploy.ps1` |
+| `SKIP_SERVICE_CONNECTOR` | `false` (string interpreted as boolean) | PowerShell equivalent: `-SkipServiceConnector` switch | Deployment scripts |
+| `environmentName`, `location`, `postgresLocation`, `databaseName` | `photoalbum`, resource group location, `location`, `photoalbum` | Script/parameter-file overrides | `infra/main.bicep`, deployment scripts, parameter JSON |
+| `postgresAdministratorLogin`, `postgresAdministratorLoginPassword` | `pgadmin`; required secure value [MASKED] | Scripts generate password; parameter JSON contains empty placeholder | `infra/main.bicep`, deployment scripts, parameter JSON |
+| `entraAdminObjectId`, `entraAdminName`, `entraAdminType` | Required, required, `User` | Scripts derive signed-in Entra user; parameter JSON holds identity placeholders | `infra/main.bicep`, deployment scripts |
+| `targetPort`, `assignAcrPullRole` | `8080` (port), `true` (boolean) | Script can retry with `assignAcrPullRole=false` | `infra/main.bicep`, deployment scripts |
+| `tags` | `azd-env-name`, `application`, `managedBy` | Bicep parameter override | `infra/main.bicep` |
+| `containerImage`, `containerName`, `useRegistryAdminCredentials` | `mcr.microsoft.com/azuredocs/containerapps-helloworld:latest`, `photoalbum`, `false` | Image must be replaced at app rollout; registry fallback uses `!assignAcrPullRole` | `infra/modules/containerapp.bicep` |
+| `skuName`, `skuTier`, `storageSizeGB`, `postgresVersion` | `Standard_B1ms`, `Burstable`, `32` (GB), `17` | PostgreSQL module parameters | `infra/modules/postgresql.bicep` |
+| `tenantId` | Subscription tenant ID | Entra admin | `infra/modules/postgresql.bicep` |
 
-### Application-Specific (Admin/Security)
-
-| Property Key | Default | Profiles | Source |
-|---|---|---|---|
-| `app.admin.username` | `admin` | test (explicit); default/docker via env fallback | `@Value("${app.admin.username:admin}")` in `SecurityConfig`; Docker Compose sets `APP_ADMIN_USERNAME` env var (Spring relaxed binding maps to this property) |
-| `app.admin.password` | *(none — required)* | test (`test-admin-password`); default/docker require env var | `@Value("${app.admin.password}")` in `SecurityConfig` — no default, must be supplied; Docker Compose sets `APP_ADMIN_PASSWORD` |
-
-### Logging
-
-| Property Key | Default | Profiles | Source |
-|---|---|---|---|
-| `logging.level.com.photoalbum` | `DEBUG` | default | static value; docker overrides to `INFO` |
-| `logging.level.org.springframework.web` | `DEBUG` | default | static value; docker overrides to `WARN` |
-| `logging.level.org.hibernate.SQL` | *(not set)* | docker only | `DEBUG`, added only in docker profile |
-
-### Environment Variables (Docker Compose → Container)
-
-| Env Var | Default | Consumed By |
-|---|---|---|
-| `SPRING_PROFILES_ACTIVE` | `docker` (hardcoded in compose) | Spring Boot profile activation |
-| `SPRING_DATASOURCE_URL` | `jdbc:oracle:thin:@oracle-db:1521/FREEPDB1` (hardcoded in compose) | `spring.datasource.url` |
-| `SPRING_DATASOURCE_USERNAME` | `${APP_USER:-photoalbum}` | `spring.datasource.username` |
-| `SPRING_DATASOURCE_PASSWORD` | *(required, from `.env`)* | `spring.datasource.password` |
-| `APP_ADMIN_USERNAME` | `${APP_ADMIN_USERNAME:-admin}` | `app.admin.username` |
-| `APP_ADMIN_PASSWORD` | *(required, from `.env`)* | `app.admin.password` |
-| `ORACLE_PASSWORD` | *(required, from `.env`)* | Oracle container SYS/SYSTEM password (not consumed by the Java app) |
-| `APP_USER` | `photoalbum` | Oracle container schema user creation (`oracle-init` scripts) |
-| `APP_USER_PASSWORD` | *(required, from `.env`)* | Oracle container schema user password |
+Remaining Bicep module inputs (generated names, IDs, workspace IDs, registry server and identity IDs) are wired from `infra/main.bicep` module outputs, not independent external property defaults. `azure-setup.ps1` separately reads or generates `POSTGRES_ADMIN_USER`, `POSTGRES_ADMIN_PASSWORD`, `POSTGRES_APP_USER` and `POSTGRES_APP_PASSWORD`; its emitted dotenv variables are not the current Compose input contract.
 
 ## Startup Parameters & Resource Requirements
 
 | Service | JVM/Runtime Options | Memory | Instance Count |
 |---|---|---|---|
-| `photoalbum-java-app` | `JAVA_OPTS="-Xmx512m -Xms256m"` (set in Dockerfile `ENV`, applied via `java $JAVA_OPTS -jar app.jar`) | No explicit Docker `mem_limit` set in `docker-compose.yml`; JVM heap capped at 512MB max | 1 (single container, no scaling/replica config defined) |
-| `oracle-db` (`gvenzl/oracle-free:latest`) | N/A (no JVM) | No explicit `mem_limit` set in `docker-compose.yml` | 1 |
-
-No Kubernetes manifests or resource `requests`/`limits` were found in the repository.
+| Compose `photoalbum-java-app` | Dockerfile `JAVA_OPTS="-Xmx512m -Xms256m"`; `java $JAVA_OPTS -jar app.jar`; `SPRING_PROFILES_ACTIVE=docker`; port `8080` | 256 MiB initial / 512 MiB maximum JVM heap; no container memory or CPU limit set | One container; no scaling configured |
+| Compose `postgres-db` | PostgreSQL 17, port `5432`; persistent `postgres_data` volume and first-run init script | No memory or CPU limit set | One container |
+| Azure Container App | `AZURE_CLIENT_ID` from user-assigned identity, `SERVER_PORT` from `targetPort` (`8080`); no JVM flags in Bicep; if this Dockerfile image is used, its 512 MiB max heap applies | 1 GiB and 0.5 CPU per replica | Minimum 1, maximum 3 replicas |
+| Azure PostgreSQL Flexible Server | PostgreSQL 17, `Standard_B1ms`/`Burstable`, 32 GB storage | No explicit memory/CPU setting beyond SKU | One server |
+| Local Maven run | Profile can be set with `-Dspring-boot.run.profiles=docker` or `SPRING_PROFILES_ACTIVE=docker`; no default startup `-D` or heap flags | Not specified | One process |
 
 ## Startup Dependency Chain
 
-1. `oracle-db` container starts first.
-2. `oracle-db` healthcheck (`healthcheck.sh` via `CMD-SHELL`) polls every 30s, times out at 10s, retries up to 15 times, with a 180s start period — accounting for Oracle's slow cold-start/database creation time.
-3. `photoalbum-java-app` has `depends_on: oracle-db: condition: service_healthy` in `docker-compose.yml`, so Docker Compose blocks starting the app container until the Oracle healthcheck passes.
-4. On the Oracle side, `oracle-init/*.sql` and `create-user.sh` run automatically via the image's `container-entrypoint-initdb.d` mechanism to create the `photoalbum` schema user before the healthcheck can succeed.
-5. `photoalbum-java-app` has `restart: on-failure`, so if the app fails to connect to the DB at startup it will retry restarting the container.
-
-No explicit application-level readiness/health endpoint (e.g., Spring Boot Actuator) or `dockerize`/wait-for-TCP script was found for the Java app itself.
+1. Local: `postgres-db` initializes the database and application role on a new volume, then `pg_isready` checks the admin user/database (10-second interval, 5-second timeout, 15 retries, 30-second start period).
+2. Local: `photoalbum-java-app` waits for `postgres-db` via Compose `depends_on: condition: service_healthy` and restarts `on-failure`. No application health check or explicit app startup timeout is configured.
+3. Azure provisioning: Log Analytics and the identity feed the Container Apps module; identity and registry/`AcrPull` assignment precede the Container App. PostgreSQL server → firewall rule → Entra admin → database; scripts subsequently create Service Connector `photoalbumdb` unless skipped.
+4. Azure runtime: image pull requires identity `AcrPull` or the conditional registry secret; PostgreSQL connectivity requires the provisioned server, Entra role and Service Connector. Bicep initially deploys a hello-world placeholder image; no explicit application readiness/liveness probe, database wait loop or startup timeout is defined.
 
 ## Secrets & Sensitive Configuration
 
 | Secret Reference | Type | Storage (masked) |
 |---|---|---|
-| `SPRING_DATASOURCE_PASSWORD` | DB connection password | `.env` file (git-ignored), no default — `${SPRING_DATASOURCE_PASSWORD}` (required, fails fast if unset) |
-| `APP_ADMIN_PASSWORD` | Admin Basic-Auth password for state-changing endpoints | `.env` file (git-ignored), no default — `${APP_ADMIN_PASSWORD}` (required) |
-| `ORACLE_PASSWORD` | Oracle SYS/SYSTEM admin password | `.env` file (git-ignored), no default (required) |
-| `APP_USER_PASSWORD` | Oracle schema user password | `.env` file (git-ignored), no default (required) |
-| `app.admin.password` (test) | Test-only admin password | Hardcoded in `application-test.properties` as `test-admin-password` (non-production, low sensitivity) |
-
-No encryption tooling (Jasypt, DPAPI, sealed secrets) is used — secrets are plain environment variables. `docker-compose.yml` uses Compose's `:?` required-variable syntax so the stack refuses to start if a required secret is missing.
+| `POSTGRES_ADMIN_PASSWORD` → `POSTGRES_PASSWORD` | Local database bootstrap password | Ignored local `.env` → Compose environment [MASKED]; template contains only a replacement placeholder. |
+| `APP_USER_PASSWORD` → `SPRING_DATASOURCE_PASSWORD` | Local database application-role password | Ignored local `.env` → PostgreSQL init and Java environment [MASKED]; Docker properties require the environment value. |
+| `APP_ADMIN_PASSWORD` → `app.admin.password` | Application admin password | Required Compose environment [MASKED], or other external Spring configuration; Azure templates do not bind it. |
+| `postgresAdministratorLoginPassword` | Azure PostgreSQL bootstrap password | Randomly generated by `infra/deploy.*`, passed via Bicep `@secure()` parameter [MASKED]; not used by app. |
+| `acr-password` | Conditional ACR image-pull credential | Container Apps secret populated by `containerRegistry.listCredentials()` only in registry-admin fallback [MASKED]. |
+| `spring.cloud.azure.credential.client-secret` | Optional, not configured service-principal secret | Described in comments/README only; would require external provisioning [MASKED]. |
+| Legacy `POSTGRES_PASSWORD` / `POSTGRES_APP_PASSWORD` | Separate Azure setup passwords | `azure-setup.ps1` reads or generates them and writes local dotenv settings [MASKED]; not the managed-identity deployment path. |
 
 ### Secrets Provisioning Workflow
 
-- **Secret source**: A developer-managed `.env` file at the repo root (copied from `.env.example`, git-ignored). No centralized secret store (Key Vault, Vault, Secrets Manager) is used for local/Docker Compose deployment.
-- **Identity/access model**: None — Docker Compose reads `.env` directly into container environment variables; no managed identity or RBAC is involved at this layer. (`azure-setup.ps1`/`azure-reset.ps1` may provision Azure-side identities for cloud deployment, but that is outside the Docker Compose flow.)
-- **Provisioning sequence**: Developer copies `.env.example` → `.env` and fills in strong values → `docker compose up` reads `.env` → Compose injects `ORACLE_PASSWORD`/`APP_USER`/`APP_USER_PASSWORD` into the `oracle-db` container (consumed by `oracle-init` scripts to create the schema user) and `SPRING_DATASOURCE_*`/`APP_ADMIN_*` into the `photoalbum-java-app` container (consumed by Spring property placeholders).
-- **Service consumption**: `oracle-db` needs `ORACLE_PASSWORD`, `APP_USER`, `APP_USER_PASSWORD`. `photoalbum-java-app` needs `SPRING_DATASOURCE_USERNAME`/`PASSWORD` (DB credentials) and `APP_ADMIN_USERNAME`/`PASSWORD` (application Basic Auth credentials for upload/delete endpoints).
+Local: copy `.env.example` to ignored `.env`, replace all password placeholders, then start Compose. Compose requires the database bootstrap, application-role and admin passwords; it passes the database values to PostgreSQL/first-run init and the app-role/admin values to Spring. Existing database volumes do not rerun initialization.
+
+Azure Bicep path: an authenticated operator's deployment script generates the PostgreSQL administrator password, passes it as a secure Bicep parameter and makes the signed-in Entra user the database administrator. A user-assigned managed identity receives registry `AcrPull` RBAC (the deploying principal needs permission to assign roles); Service Connector then binds that identity to PostgreSQL and injects passwordless datasource settings. If role assignment fails, deployment retries with ACR admin enabled and stores the registry password as the `acr-password` Container Apps secret. No Key Vault or encrypted property store is provisioned. **`app.admin.password` is required by the application but not provisioned by Bicep or Service Connector; a real application image needs an externally supplied value to start.**
 
 ## Feature Flags
 
-No feature flag framework, `@ConditionalOnProperty`/`@ConditionalOnExpression` usage, or A/B testing configuration was found in the codebase.
+| Flag Name | Default | Controlled By |
+|---|---|---|
+| `spring.datasource.azure.passwordless-enabled` | `true` base; `false` Docker | `SPRING_DATASOURCE_AZURE_PASSWORDLESS_ENABLED`, Docker profile, Service Connector |
+| `spring.cloud.azure.credential.managed-identity-enabled` | `true` base | `SPRING_CLOUD_AZURE_CREDENTIAL_MANAGED_IDENTITY_ENABLED`, Service Connector |
+| `assignAcrPullRole` / `useRegistryAdminCredentials` | `true` / `false` | Bicep parameter; deployment retry switches to registry-admin credentials on failure |
+| `SKIP_SERVICE_CONNECTOR` / `-SkipServiceConnector` | `false` / not set | Bash environment / PowerShell switch |
+
+No application feature-flag service, A/B rollout, `@ConditionalOnProperty`, or `@ConditionalOnExpression` is configured.
 
 ## Framework & Runtime Versions
 
 | Component | Version | Source |
 |---|---|---|
-| Spring Boot (parent BOM) | 2.7.18 | `pom.xml` `<parent>` |
-| Java (language level) | 8 | `pom.xml` (`java.version`, `maven.compiler.source/target=8`) |
-| Oracle JDBC driver (`ojdbc8`) | managed by Spring Boot BOM (no explicit version pin) | `pom.xml` |
-| Commons IO | 2.11.0 | `pom.xml` |
-| H2 Database (test scope) | managed by Spring Boot BOM | `pom.xml` |
-| Maven (build tool, Docker build stage) | 3.9.6 | `Dockerfile` (`maven:3.9.6-eclipse-temurin-8`) |
-| Docker base image (build stage) | `maven:3.9.6-eclipse-temurin-8` | `Dockerfile` |
-| Docker base image (runtime stage) | `eclipse-temurin:8-jre` | `Dockerfile` |
-| Oracle Database (container) | `gvenzl/oracle-free:latest` (Oracle Database Free 23ai) | `docker-compose.yml` |
+| Spring Boot parent / Maven plugin | `4.0.0` (plugin version inherited) | `pom.xml` |
+| Java compile target | `25` | `pom.xml` |
+| Spring Cloud Azure BOM | `7.4.0` | `pom.xml` |
+| Spring Boot DevTools | `4.0.6` explicitly | `pom.xml` |
+| Commons IO | `2.14.0` explicitly | `pom.xml` |
+| Hibernate, PostgreSQL JDBC, H2, Spring Security | Managed by parent/BOM; no explicit artifact version | `pom.xml` |
+| Maven build image | `maven:3.9.6-eclipse-temurin-8` (Maven 3.9.6 / Java 8) | `Dockerfile`; incompatible with Java 25 compilation |
+| Java runtime image | `eclipse-temurin:8-jre` (Java 8) | `Dockerfile`; incompatible with Java 25 bytecode |
+| Local PostgreSQL image / Azure PostgreSQL | `postgres:17-alpine` / `17` | `docker-compose.yml`, `infra/modules/postgresql.bicep` |
+| Azure Container App initial image | `mcr.microsoft.com/azuredocs/containerapps-helloworld:latest` | `infra/modules/containerapp.bicep`; placeholder, not a pinned application runtime |
+| Local Maven installation | Not pinned; no Maven wrapper in repository | Repository root |

@@ -281,7 +281,7 @@ Thumbs.db
 
 # Application
 /uploads
-/oracle-data
+/postgres-data
 
 # Docker
 .dockerignore

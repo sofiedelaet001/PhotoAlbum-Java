@@ -1,6 +1,6 @@
-# Photo Album Application - Java Spring Boot with Oracle DB
+# Photo Album Application - Java Spring Boot with PostgreSQL
 
-A photo gallery application built with Spring Boot and Oracle Database, featuring drag-and-drop upload, responsive gallery view, and full-size photo details with navigation.
+A photo gallery application built with Spring Boot and PostgreSQL, featuring drag-and-drop upload, responsive gallery view, and full-size photo details with navigation.
 
 ## Features
 
@@ -10,14 +10,14 @@ A photo gallery application built with Spring Boot and Oracle Database, featurin
 - 📊 **Metadata Display**: View file size, dimensions, aspect ratio, and upload timestamp
 - ⬅️➡️ **Photo Navigation**: Previous/Next buttons to browse through photos
 - ✅ **Validation**: File type and size validation (JPEG, PNG, GIF, WebP; max 10MB)
-- 🗄️ **Database Storage**: Photo data stored as BLOBs in Oracle Database
+- 🗄️ **Database Storage**: Photo data stored as `bytea` values in PostgreSQL
 - 🗑️ **Delete Photos**: Remove photos from both gallery and detail views
 - 🎨 **Modern UI**: Clean, responsive design with Bootstrap 5
 
 ## Technology Stack
 
-- **Framework**: Spring Boot 2.7.18 (Java 8)
-- **Database**: Oracle Database 21c Express Edition
+- **Framework**: Spring Boot 4.0.0 (Java 25)
+- **Database**: PostgreSQL 17 (Azure Database for PostgreSQL Flexible Server in Azure; `postgres:17-alpine` locally)
 - **Templating**: Thymeleaf
 - **Build Tool**: Maven
 - **Frontend**: Bootstrap 5.3.0, Vanilla JavaScript
@@ -27,7 +27,6 @@ A photo gallery application built with Spring Boot and Oracle Database, featurin
 
 - Docker Desktop installed and running
 - Docker Compose (included with Docker Desktop)
-- Minimum 4GB RAM available for Oracle DB container
 
 ## Quick Start
 
@@ -47,14 +46,14 @@ A photo gallery application built with Spring Boot and Oracle Database, featurin
    ```
 
    This will:
-   - Start Oracle Database 21c Express Edition container
+   - Start a PostgreSQL 17 container
    - Build the Java Spring Boot application
    - Start the Photo Album application container
    - Automatically create the database schema using JPA/Hibernate
 
 3. **Wait for services to start**:
-   - Oracle DB takes 2-3 minutes to initialize on first run
-   - Application will start once Oracle is healthy
+   - PostgreSQL initialises in a few seconds on first run
+   - Application will start once PostgreSQL is healthy
 
 4. **Access the application**:
    - Open your browser and navigate to: **http://localhost:8080**
@@ -62,21 +61,20 @@ A photo gallery application built with Spring Boot and Oracle Database, featurin
 
 ## Services
 
-## Oracle Database
-- **Image**: `container-registry.oracle.com/database/express:21.3.0-xe`
+## PostgreSQL Database
+- **Image**: `postgres:17-alpine`
 - **Ports**: 
-  - `1521` (database) - mapped to host port 1521
-  - `5500` (Enterprise Manager) - mapped to host port 5500
-- **Database**: `XE` (Express Edition)
-- **Schema**: `photoalbum`
+  - `5432` (database) - mapped to host port 5432
+- **Database**: `photoalbum` (override with `APP_DB_NAME`)
+- **Schema**: `public`
 - **Username/Password**: provided via the `APP_USER` / `APP_USER_PASSWORD` variables in `.env` (never hard-coded)
 
 ## Photo Album Java Application
 - **Port**: `8080` (mapped to host port 8080)
-- **Framework**: Spring Boot 2.7.18
-- **Java Version**: 8
-- **Database**: Connects to Oracle container
-- **Photo Storage**: All photos stored as BLOBs in database (no file system storage)
+- **Framework**: Spring Boot 4.0.0
+- **Java Version**: 25
+- **Database**: Connects to the PostgreSQL container
+- **Photo Storage**: All photos stored as `bytea` values in the database (no file system storage)
 - **UUID System**: Each photo gets a globally unique identifier for cache-busting
 
 ## Database Setup
@@ -84,27 +82,27 @@ A photo gallery application built with Spring Boot and Oracle Database, featurin
 The application uses Spring Data JPA with Hibernate for automatic schema management:
 
 1. **Automatic Schema Creation**: Hibernate automatically creates tables and indexes
-2. **User Creation**: Oracle init scripts create the `photoalbum` user
+2. **Role Creation**: The PostgreSQL image creates a separate bootstrap administrator and database; `postgres-init/` creates the `photoalbum` application role from `.env` and makes it the database/schema owner without granting SUPERUSER
 3. **No Manual Setup Required**: Everything is handled automatically
 
 ### Database Schema
 
-The application creates the following table structure in Oracle:
+The application creates the following table structure in PostgreSQL:
 
-#### PHOTOS Table
-- `ID` (VARCHAR2(36), Primary Key, UUID Generated)
-- `ORIGINAL_FILE_NAME` (VARCHAR2(255), Not Null)
-- `STORED_FILE_NAME` (VARCHAR2(255), Not Null)
-- `FILE_PATH` (VARCHAR2(500), Nullable)
-- `FILE_SIZE` (NUMBER, Not Null)
-- `MIME_TYPE` (VARCHAR2(50), Not Null)
-- `UPLOADED_AT` (TIMESTAMP, Not Null, Default SYSTIMESTAMP)
-- `WIDTH` (NUMBER, Nullable)
-- `HEIGHT` (NUMBER, Nullable)
-- `PHOTO_DATA` (BLOB, Not Null)
+#### photos Table
+- `id` (varchar(36), Primary Key, UUID Generated)
+- `original_file_name` (varchar(255), Not Null)
+- `stored_file_name` (varchar(255), Not Null)
+- `file_path` (varchar(500), Nullable)
+- `file_size` (bigint, Not Null)
+- `mime_type` (varchar(50), Not Null)
+- `uploaded_at` (timestamp, Not Null, Default CURRENT_TIMESTAMP)
+- `width` (integer, Nullable)
+- `height` (integer, Nullable)
+- `photo_data` (bytea, Nullable)
 
 #### Indexes
-- `IDX_PHOTOS_UPLOADED_AT` (Index on UPLOADED_AT for chronological queries)
+- `idx_photos_uploaded_at` (Index on `uploaded_at` for chronological queries)
 
 #### UUID Generation
 - **Java**: `UUID.randomUUID().toString()` generates unique identifiers
@@ -113,8 +111,8 @@ The application creates the following table structure in Oracle:
 
 ## Storage Architecture
 
-### Database BLOB Storage (Current Implementation)
-- **Photos**: Stored as BLOB data directly in the database
+### Database `bytea` Storage (Current Implementation)
+- **Photos**: Stored as `bytea` data directly in the database
 - **Benefits**: 
   - No file system dependencies
   - ACID compliance for photo operations
@@ -122,30 +120,83 @@ The application creates the following table structure in Oracle:
   - Perfect for containerized deployments
 - **Trade-offs**: Database size increases, but suitable for moderate photo volumes
 
+## Azure deployment (passwordless)
+
+In Azure the application runs on Azure Container Apps and connects to **Azure Database for
+PostgreSQL Flexible Server** using a **user-assigned managed identity** — no password exists
+anywhere.
+
+- A Service Connector linker (`photoalbumdb`) injects `spring.datasource.url`,
+  `spring.datasource.username`, `spring.datasource.azure.passwordless-enabled`,
+  `spring.cloud.azure.credential.client-id` and
+  `spring.cloud.azure.credential.managed-identity-enabled` at runtime.
+- The injected JDBC URL must include
+  `sslmode=require&authenticationPluginClassName=com.azure.identity.extensions.jdbc.postgresql.AzurePostgresqlAuthenticationPlugin`;
+  do not replace it with a plain PostgreSQL URL.
+- **Do not** set `SPRING_DATASOURCE_*` environment variables for the Azure deployment; they
+  would override the injected configuration.
+- The injected JDBC URL references
+  `com.azure.identity.extensions.jdbc.postgresql.AzurePostgresqlAuthenticationPlugin`, which is
+  supplied by the `com.azure.spring:spring-cloud-azure-starter-jdbc-postgresql` dependency in
+  `pom.xml`. Removing that dependency still compiles but breaks the application at startup.
+- To authenticate with a **service principal** instead of a managed identity, drop
+  `spring.cloud.azure.credential.managed-identity-enabled` and set
+  `spring.cloud.azure.profile.tenant-id`, `spring.cloud.azure.credential.client-id` and
+  `spring.cloud.azure.credential.client-secret` (see the comments in
+  `src/main/resources/application.properties`).
+
+See `infra/` and `.github/modernize/env.md` for the provisioned resource names.
+
+### Moving existing Oracle photo records
+
+The application now stores photo bytes in PostgreSQL `photos.photo_data` (`bytea`).
+For a one-time move from an existing Oracle database, use Ora2Pg from a secured
+migration host; no Oracle endpoint or source credentials are stored in this
+repository. Keep the application in maintenance mode while copying data so no
+uploads are missed.
+
+1. Let the application create the PostgreSQL schema, then stop application
+   writes. Configure Ora2Pg outside the repository with the Oracle source
+   connection and the PostgreSQL target details. Restrict access to that config
+   because it may contain source credentials.
+2. Configure Ora2Pg to export the existing `PHOTOS` rows (`TYPE COPY`) and map
+   Oracle `PHOTO_DATA` BLOB values to PostgreSQL `bytea`. Preserve the existing
+   columns (`ID`, `ORIGINAL_FILE_NAME`, `PHOTO_DATA`, `STORED_FILE_NAME`,
+   `FILE_PATH`, `FILE_SIZE`, `MIME_TYPE`, `UPLOADED_AT`, `WIDTH`, `HEIGHT`);
+   the target uses the lowercase names shown in the schema section above.
+3. Review the generated SQL/data export for the expected row count and binary
+   column handling, then load it into `photoalbum` using `psql` with the
+   migration operator's authorized target credentials. Do not use the
+   application's local database role for production data migration.
+4. Compare source and target row counts and representative photo byte lengths,
+   then smoke-test the gallery, detail view, image retrieval, navigation and
+   deletion before reopening writes.
+
 ## Development
 
 ### Running Locally (without Docker)
 
-1. **Install Oracle Database** (or use Oracle XE)
-2. **Create database user** (choose your own strong password; grant least
-   privilege only — do NOT grant DBA):
+1. **Install PostgreSQL 17** (or run only the `postgres-db` compose service)
+2. **Create the database and role** (choose your own strong password; grant least
+   privilege only — do NOT grant SUPERUSER):
    ```sql
-   CREATE USER photoalbum IDENTIFIED BY "<your-strong-password>";
-   GRANT CREATE SESSION, CREATE TABLE, CREATE SEQUENCE, CREATE VIEW,
-         CREATE PROCEDURE, CREATE TRIGGER, CREATE TYPE, CREATE SYNONYM
-         TO photoalbum;
-   ALTER USER photoalbum QUOTA UNLIMITED ON USERS;
+   CREATE ROLE photoalbum LOGIN PASSWORD '<your-strong-password>';
+   CREATE DATABASE photoalbum OWNER photoalbum;
+   \connect photoalbum
+   GRANT USAGE, CREATE ON SCHEMA public TO photoalbum;
    ```
-3. **Provide credentials via environment variables** (do not hard-code them
-   in `application.properties`):
+3. **Provide local connection settings via environment variables** (do not
+   hard-code them in `application.properties`). Activate the local `docker`
+   profile, which reads the local-only password; Azure uses managed identity:
    ```bash
-   export SPRING_DATASOURCE_URL="jdbc:oracle:thin:@localhost:1521:XE"
+   export SPRING_DATASOURCE_URL="jdbc:postgresql://localhost:5432/photoalbum"
    export SPRING_DATASOURCE_USERNAME="photoalbum"
    export SPRING_DATASOURCE_PASSWORD="<your-strong-password>"
+   export SPRING_PROFILES_ACTIVE="docker"
    ```
 4. **Run the application**:
    ```bash
-   mvn spring-boot:run
+   mvn spring-boot:run -Dspring-boot.run.profiles=docker
    ```
 
 ### Building from Source
@@ -160,26 +211,24 @@ java -jar target/photo-album-1.0.0.jar
 
 ## Troubleshooting
 
-### Oracle Database Issues
+### PostgreSQL Database Issues
 
-1. **Oracle container won't start**:
+1. **PostgreSQL container won't start**:
    ```bash
    # Check container logs
-   docker-compose logs oracle-db
-   
-   # Increase Docker memory allocation to at least 4GB
+   docker-compose logs postgres-db
    ```
 
 2. **Database connection errors**:
    ```bash
-   # Verify Oracle is ready (credentials come from your .env values)
-   docker exec -it photoalbum-oracle sh -c 'sqlplus "$APP_USER/$APP_USER_PASSWORD@//localhost:1521/FREEPDB1"'
+   # Verify PostgreSQL is ready (credentials come from your .env values)
+   docker exec -it photoalbum-postgres sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "SELECT 1"'
    ```
 
 3. **Permission errors**:
    ```bash
-   # Check Oracle init scripts ran
-   docker-compose logs oracle-db | grep "setup"
+   # Check PostgreSQL init scripts ran
+   docker-compose logs postgres-db | grep "init"
    ```
 
 ### Application Issues
@@ -210,17 +259,9 @@ docker-compose down
 docker-compose down -v
 ```
 
-## Enterprise Manager (Optional)
-
-Oracle Enterprise Manager is available at `http://localhost:5500/em` for database administration:
-- **Username**: `system`
-- **Password**: the `ORACLE_PASSWORD` value you set in `.env`
-- **Container**: `XE`
-
 ## Performance Notes
 
-- Oracle XE has limitations (max 2 CPU threads, 2GB RAM, 12GB storage)
-- BLOB storage in database impacts performance at scale
+- `bytea` storage in the database impacts performance at scale
 - Suitable for development and small-scale deployments
 
 ## Project Structure
@@ -228,8 +269,9 @@ Oracle Enterprise Manager is available at `http://localhost:5500/em` for databas
 ```
 PhotoAlbum/
 ├── src/                             # Java source code
-├── oracle-init/                     # Oracle initialization scripts
-├── docker-compose.yml               # Oracle + Application services
+├── postgres-init/                   # PostgreSQL initialization scripts
+├── infra/                           # Azure infrastructure (Bicep) and deploy scripts
+├── docker-compose.yml               # PostgreSQL + Application services
 ├── Dockerfile                       # Application container build
 ├── pom.xml                          # Maven dependencies and build config
 └── README.md                        # Project documentation

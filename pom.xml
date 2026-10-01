@@ -18,14 +18,29 @@
     <packaging>jar</packaging>
 
     <name>Photo Album</name>
-    <description>A simple photo storage and gallery application built with Spring Boot and Oracle DB</description>
+    <description>A simple photo storage and gallery application built with Spring Boot and PostgreSQL</description>
 
     <properties>
         <java.version>25</java.version>
         <maven.compiler.source>25</maven.compiler.source>
         <maven.compiler.target>25</maven.compiler.target>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <!-- Spring Boot 4.x requires spring-cloud-azure-dependencies >= 7.1.0 -->
+        <spring-cloud-azure.version>7.4.0</spring-cloud-azure.version>
     </properties>
+
+    <dependencyManagement>
+        <dependencies>
+            <!-- Manages the versions of all Spring Cloud Azure artifacts -->
+            <dependency>
+                <groupId>com.azure.spring</groupId>
+                <artifactId>spring-cloud-azure-dependencies</artifactId>
+                <version>${spring-cloud-azure.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
 
     <dependencies>
         <!-- Spring Boot Web Starter -->
@@ -46,11 +61,27 @@
             <artifactId>spring-boot-starter-data-jpa</artifactId>
         </dependency>
 
-        <!-- Oracle JDBC Driver -->
+        <!-- PostgreSQL JDBC Driver -->
         <dependency>
-            <groupId>com.oracle.database.jdbc</groupId>
-            <artifactId>ojdbc8</artifactId>
+            <groupId>org.postgresql</groupId>
+            <artifactId>postgresql</artifactId>
             <scope>runtime</scope>
+        </dependency>
+
+        <!--
+          Passwordless (Microsoft Entra / managed identity) authentication for
+          Azure Database for PostgreSQL.
+
+          REQUIRED AT RUNTIME: the JDBC URL injected by Azure Service Connector
+          references
+          com.azure.identity.extensions.jdbc.postgresql.AzurePostgresqlAuthenticationPlugin,
+          which PGJDBC loads reflectively at connect time. Removing this
+          dependency still compiles and packages successfully but crashes the
+          application at startup ("Unable to load Authentication Plugin ...").
+        -->
+        <dependency>
+            <groupId>com.azure.spring</groupId>
+            <artifactId>spring-cloud-azure-starter-jdbc-postgresql</artifactId>
         </dependency>
 
         <!-- Spring Boot Validation -->

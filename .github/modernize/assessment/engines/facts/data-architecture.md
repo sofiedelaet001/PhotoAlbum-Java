@@ -1,69 +1,70 @@
 # Data Architecture & Persistence Layer
 
-The data layer consists of a single JPA entity (`Photo`) persisted via Spring Data JPA/Hibernate, with photo binary content stored as a database BLOB rather than on the filesystem.
+One JPA entity, `Photo`, persists image bytes and metadata in a single relational table. Hibernate maps the entity to PostgreSQL for application runs and H2 for tests.
 
 ## Database Configuration
 
 | Service/Module | DB Type | Profile | Driver | Connection | Migration Tool |
-|---|---|---|---|---|---|
-| photo-album (main app) | Oracle Database (Free/23ai) | default (local dev) | `ojdbc8` (Oracle JDBC, runtime scope) | `jdbc:oracle:thin:@oracle-db:1521/FREEPDB1` (overridable via `SPRING_DATASOURCE_URL`) | None (Hibernate schema generation) |
-| photo-album (main app) | Oracle Database (Free/23ai) | `docker` | `ojdbc8` (Oracle JDBC, runtime scope) | Same JDBC URL, injected via Docker Compose environment variables from `.env` | None (Hibernate schema generation) |
-| photo-album (test) | H2 (in-memory) | `test` | `org.h2.Driver` | `jdbc:h2:mem:testdb` | None (Hibernate schema generation) |
+| --- | --- | --- | --- | --- | --- |
+| Photo album | PostgreSQL | Default (including Azure) | PostgreSQL JDBC driver; Spring Cloud Azure JDBC PostgreSQL integration for passwordless authentication | Environment-overridable JDBC URL, defaulting to `jdbc:postgresql://postgres-db:5432/photoalbum`; Azure Service Connector can inject the URL and username for Microsoft Entra authentication. Hibernate updates the existing schema by default. | None; Hibernate manages schema changes. |
+| Photo album | PostgreSQL | `docker` | PostgreSQL JDBC driver | Environment-overridable JDBC URL, defaulting to `jdbc:postgresql://postgres-db:5432/photoalbum`; application username and password supplied through environment variables. Hibernate recreates the schema at startup. | None; PostgreSQL initialization creates the application role and grants schema ownership, not application tables. |
+| Photo album tests | H2 (in memory) | `test` | H2 JDBC driver (test scope) | `jdbc:h2:mem:testdb`; Hibernate creates and drops the schema for the test context. | None. |
 
-- Hibernate manages the schema directly; there is no Flyway/Liquibase migration tool in the project. Schema management behavior (`ddl-auto`) differs per profile — see `configuration-inventory.md` for exact property values.
-- No seed data files (`data.sql`/`import.sql`) are present; the `photos` table starts empty and is populated only through the upload feature.
-- The `oracle-init/` scripts (`01-create-user.sql`, `02-verify-user.sql`, `healthcheck.sh`, `healthcheck.sql`) run at container start to provision the least-privileged `photoalbum` schema user (session/table/sequence/view/procedure/trigger/type/synonym creation grants) — they do not create application tables themselves; Hibernate does that at startup.
-- No connection pool tuning (HikariCP sizing, timeouts) is configured beyond Spring Boot defaults.
+No explicit connection-pool size or custom pooling configuration was found; the JPA starter supplies the default datasource pooling behavior. No versioned migrations, application schema SQL scripts, or seed data were found. See `configuration-inventory.md` for the property inventory. Sources: `pom.xml`, `src/main/resources/application.properties`, `src/main/resources/application-docker.properties`, `src/test/resources/application-test.properties`, `postgres-init/01-init-schema.sh`.
 
 ## Data Ownership per Service
 
 | Service | Tables Owned | ORM Framework | Caching | Notes |
-|---|---|---|---|---|
-| photo-album (monolith) | `photos` | Hibernate / Spring Data JPA (`JpaRepository`) | None | Single-module application; one entity owns 100% of persisted state, including binary photo data (BLOB) stored inline in the row. |
+| --- | --- | --- | --- | --- |
+| Photo album (`PhotoServiceImpl` / `PhotoRepository`) | `photos` | Spring Data JPA / Hibernate | No application or ORM second-level cache configured | Owns both photo metadata and binary payload in the same table; no other independently persisted module identified. |
 
 ## Entity Model
+
+`Photo` is mapped in `src/main/java/com/photoalbum/model/Photo.java`. Its string ID is generated as a UUID by the Java constructor (not a database-generated key); `photo_data` is a nullable materialized BLOB mapped to PostgreSQL `bytea`. `file_path` is retained for compatibility but the image bytes live in the database. The upload timestamp has an index; the filename, size, MIME type, and timestamp columns are non-null, while dimensions are optional. `UploadResult` is a non-persistent result object. No JPA relationships or foreign keys are defined.
 
 ```mermaid
 erDiagram
     Photo {
-        string Id PK "UUID string, length 36"
-        string OriginalFileName "original uploaded filename"
-        bytes PhotoData "BLOB, binary image content"
-        string StoredFileName "generated UUID + extension"
-        string FilePath "legacy/compat field, not used for serving"
-        long FileSize "bytes, NUMBER 19,0"
-        string MimeType "e.g. image/jpeg"
-        datetime UploadedAt "indexed, defaults to SYSTIMESTAMP"
-        int Width "pixels, nullable"
-        int Height "pixels, nullable"
+        string id PK
+        string originalFileName
+        bytes photoData
+        string storedFileName
+        string filePath
+        long fileSize
+        string mimeType
+        datetime uploadedAt
+        int width
+        int height
     }
 ```
 
-There is only one entity (`Photo`, `src/main/java/com/photoalbum/model/Photo.java`); no relationships to other entities exist. An index (`idx_photos_uploaded_at`) is defined on `uploaded_at` to support ordering/navigation queries.
+The photo album service owns the sole entity; there are no relationship edges to draw. `PhotoServiceImpl` has a class-level `@Transactional` boundary, with read-only transactions on retrieval and navigation methods; upload and delete use the class-level transaction. Sources: `src/main/java/com/photoalbum/model/Photo.java`, `src/main/java/com/photoalbum/service/impl/PhotoServiceImpl.java`.
 
 ## Key Repository Methods
 
-| Service | Repository | Notable Methods | Purpose |
-|---|---|---|---|
-| photo-album | `PhotoRepository` (`src/main/java/com/photoalbum/repository/PhotoRepository.java`), extends `JpaRepository<Photo, String>` | `findAllOrderByUploadedAtDesc()` | Native SQL query returning all photos newest-first for the gallery view |
-| photo-album | `PhotoRepository` | `findPhotosUploadedBefore(LocalDateTime uploadedAt)` | Native query using `ROWNUM` (Oracle-specific) to fetch up to 10 older photos for "previous" navigation |
-| photo-album | `PhotoRepository` | `findPhotosUploadedAfter(LocalDateTime uploadedAt)` | Native query for "next" navigation, ordered ascending |
-| photo-album | `PhotoRepository` | `findPhotosByUploadMonth(String year, String month)` | Native query using Oracle `TO_CHAR()` to filter photos by upload year/month |
-| photo-album | `PhotoRepository` | `findPhotosWithPagination(int startRow, int endRow)` | Native query using nested `ROWNUM` subqueries for Oracle-style pagination |
-| photo-album | `PhotoRepository` | `findPhotosWithStatistics()` | Native query using Oracle analytic functions (`RANK() OVER`, `SUM() OVER`) to compute file-size ranking and running totals; returns raw `Object[]` rows |
+`PhotoRepository` (`src/main/java/com/photoalbum/repository/PhotoRepository.java`) extends `JpaRepository<Photo, String>`; the table below focuses on its custom native SQL methods.
 
-All custom queries are Oracle-specific native SQL (`ROWNUM`, `TO_CHAR`, analytic window functions), which is a portability concern for any future database migration. Transaction boundaries are managed at the service layer (`PhotoServiceImpl`) via class-level `@Transactional`, with read-only overrides on query methods.
+| Service | Repository | Notable Methods | Purpose |
+| --- | --- | --- | --- |
+| Photo album | `PhotoRepository` | `List<Photo> findAllOrderByUploadedAtDesc()` | Returns photos newest first. |
+| Photo album | `PhotoRepository` | `List<Photo> findPhotosUploadedBefore(LocalDateTime uploadedAt)` | Returns up to ten earlier photos in descending timestamp order. |
+| Photo album | `PhotoRepository` | `List<Photo> findPhotosUploadedAfter(LocalDateTime uploadedAt)` | Returns later photos in ascending timestamp order; substitutes a default for null `file_path` in its native projection. |
+| Photo album | `PhotoRepository` | `List<Photo> findPhotosByUploadMonth(String year, String month)` | Filters by year and month using PostgreSQL `TO_CHAR`. |
+| Photo album | `PhotoRepository` | `List<Photo> findPhotosWithPagination(int startRow, int endRow)` | Uses PostgreSQL `LIMIT`/`OFFSET` for a 1-based inclusive row range. |
+| Photo album | `PhotoRepository` | `List<Object[]> findPhotosWithStatistics()` | Returns photo columns plus size rank and running byte total from window functions. |
+
+These queries select `photo_data` along with metadata; no bulk cross-service aggregation query, named query, or stored procedure was found. Standard inherited methods used by the service include lookup, save, and delete, but are omitted from the table.
 
 ## Caching Strategy
 
-No caching layer is present. There are no `@Cacheable`/`@CacheEvict` annotations, no JSR-107/JCache usage, and no external cache provider (Redis, EhCache, Caffeine) configured in `pom.xml` or application properties. Every read (gallery listing, photo detail, navigation) hits the database directly, including full BLOB retrieval.
+No Spring Cache annotations, cache provider, JCache binding, cache regions, TTL, eviction policy, or Hibernate second-level/query cache configuration was found. Reads access the repository rather than an application cache. Photo binary responses explicitly set no-cache/no-store headers, and security configuration uses stateless sessions; no session-backed cache is configured. There is no documented cache-aside, read-through, write-through, or write-behind strategy.
 
 ## Data Ownership Boundaries
 
-The application is a single-module monolith with one shared Oracle database instance (per-environment: Oracle in default/docker profiles, H2 in-memory for tests) and no service decomposition — there is no cross-service data access pattern to describe, as `PhotoRepository` is the sole data access point used by `PhotoServiceImpl` and, transitively, the controllers. All reads and writes go through the same repository; there is no CQRS separation.
+The single service uses one database and one table for both metadata and image bytes; there is no database-per-service boundary or cross-service data access. Controllers call the photo service, which reads and writes through `PhotoRepository`; no separate read/write stores or CQRS model were found. All custom queries are local to the `photos` table.
 
 ### Data Classification & Sensitivity
 
-| Entity | Sensitive Fields | Classification | Controls in Place |
-|---|---|---|---|
-| `Photo` | `photoData` (BLOB image content), `originalFileName` | Potentially PII (uploaded photos and filenames may contain personal/identifying imagery or names) | No encryption-at-rest, no data masking, and no field-level access control configured; BLOB is stored and retrieved in plaintext by Hibernate. Access to upload/delete is restricted at the application layer via `SecurityConfig`, but stored data itself is unencrypted. |
+| Entity | Sensitive Fields | Classification (PII/PHI/PCI/None) | Controls in Place |
+| --- | --- | --- | --- |
+| `Photo` | `originalFileName`, `photoData` (images may contain identifiable people or embedded personal information) | Potential PII; no explicit PHI or PCI fields | Authentication protects writes, but reads are public. No field-level access control, data masking, or application-configured encryption at rest was found; database/platform-level encryption is not established by these files. |

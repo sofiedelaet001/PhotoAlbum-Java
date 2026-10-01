@@ -6,6 +6,9 @@ import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Positive;
 import jakarta.validation.constraints.Size;
 
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
+
 import java.time.LocalDateTime;
 import java.util.UUID;
 
@@ -34,9 +37,14 @@ public class Photo {
     private String originalFileName;
 
     /**
-     * Binary photo data stored directly in Oracle database
+     * Binary photo data stored directly in the PostgreSQL database.
+     *
+     * MATERIALIZED_BLOB maps to a PostgreSQL {@code bytea} column (an inline,
+     * self-contained binary value) instead of an {@code oid} large-object
+     * reference, which keeps the plain byte[] semantics of the field.
      */
     @Lob
+    @JdbcTypeCode(SqlTypes.MATERIALIZED_BLOB)
     @Column(name = "photo_data", nullable = true)
     private byte[] photoData;
 
@@ -60,7 +68,7 @@ public class Photo {
      */
     @NotNull
     @Positive
-    @Column(name = "file_size", nullable = false, columnDefinition = "NUMBER(19,0)")
+    @Column(name = "file_size", nullable = false, columnDefinition = "bigint")
     private Long fileSize;
 
     /**
@@ -75,7 +83,7 @@ public class Photo {
      * Timestamp of upload
      */
     @NotNull
-    @Column(name = "uploaded_at", nullable = false, columnDefinition = "TIMESTAMP DEFAULT SYSTIMESTAMP")
+    @Column(name = "uploaded_at", nullable = false, columnDefinition = "timestamp DEFAULT CURRENT_TIMESTAMP")
     private LocalDateTime uploadedAt;
 
     /**

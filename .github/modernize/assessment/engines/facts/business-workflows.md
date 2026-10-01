@@ -1,152 +1,106 @@
 # Core Business Workflows
 
-PhotoAlbum is a simple web-based photo gallery application that lets users upload, browse, view, and delete photos stored as binary data in an Oracle database.
+Photo Album lets visitors browse and view photos while authenticated users upload and remove them. Each photo is managed as an independent item in one shared gallery.
 
 ## Domain Entities
 
 | Entity | Service / Bounded Context | Description | Key Relationships |
 |---|---|---|---|
-| Photo | Photo Gallery (single module) | Represents an uploaded photo with its binary content and display metadata (dimensions, upload timestamp). The aggregate root of the application. | Standalone entity — no relationships to other entities. Ordered/queried by `uploadedAt` to support gallery listing and prev/next navigation. |
-| UploadResult | Photo Gallery (single module) | Transient (non-persisted) value object representing the outcome of a single file upload attempt — either success (with the new photo's ID) or failure (with an error message). | Produced by the upload workflow for each `Photo` created; not stored. |
+| Photo | Photo Album / Photo Gallery | Aggregate root representing an uploaded image and the information needed to display it. | Independent of other domain entities; its upload time determines gallery order and adjacent-photo navigation. |
+| UploadResult | Photo Album / Photo Gallery | Transient outcome of one upload attempt, identifying a saved photo or explaining a rejection. | Produced for a single attempted Photo upload; never persisted. |
 
 ## Service-to-Domain Mapping
 
-This is a single-module monolithic Spring Boot application — there is only one bounded context and no cross-service composition.
-
 | Service | Domain Context | Owned Entities | External Dependencies |
 |---|---|---|---|
-| photoalbum (single Spring Boot app) | Photo Gallery Management | Photo | Oracle database (photo BLOB storage via `PhotoRepository`); in-memory admin user store for authentication |
+| Photo Album application (single deployable service) | Photo Gallery | Photo; produces UploadResult | PostgreSQL is the persistence store for photo records and image bytes. The browser consumes gallery pages, upload results and photo content from this same service. |
+
+There are no independently deployed domain services, shared cross-service identifiers, events or gateway aggregations. `PhotoServiceImpl` owns photo operations within the application; `PhotoRepository` persists the Photo aggregate.
 
 ## Primary Workflows
 
-### Workflow 1: Browse Photo Gallery
+### Workflow 1: Upload Photos
 
-- Entry point: `GET /` (`HomeController.index`)
-- Flow: Controller calls `PhotoService.getAllPhotos()` → `PhotoRepository.findAllOrderByUploadedAtDesc()` retrieves all photos ordered newest-first → results bound to the view model for gallery rendering.
-- Business rule: On any retrieval error, the gallery degrades gracefully by rendering an empty photo list rather than failing the page.
-- No authentication required — the gallery is publicly readable.
+1. An authenticated user selects or drops files; the browser filters unsupported types and oversized files before submitting `POST /upload`. Server-side checks remain authoritative.
+2. `HomeController` rejects a request with no files. For each submitted file, `PhotoServiceImpl` applies the upload validation rules, reads the bytes, and inspects the image header for dimensions. A dimension-extraction error can leave dimensions unavailable without preventing the save; an over-limit pixel count rejects that file.
+3. The service creates a Photo with a new identifier, upload time, original filename, image bytes and display metadata, then persists it via `PhotoRepository`. Its generated compatibility path is not where the image is served from.
+4. The controller resolves each successful photo for response metadata and returns separate uploaded and failed lists. One rejected file does not prevent later files from being attempted; the response's overall success flag is true when at least one uploaded photo is included. The browser adds successful uploads to the gallery and shows per-file errors.
 
-### Workflow 2: Upload Photo(s)
+### Workflow 2: Browse and View Photos
 
-- Entry point: `POST /upload` (`HomeController.uploadPhotos`), requires authentication (see Business Rules).
-- Flow (per file, `PhotoServiceImpl.uploadPhoto`):
-  1. Reject request immediately if no files were provided.
-  2. For each file: validate MIME type is in the configured allow-list (JPEG, PNG, GIF, WebP); reject unsupported types.
-  3. Validate file size against the configured maximum (`app.file-upload.max-file-size-bytes`); reject oversized files.
-  4. Reject empty (zero-length) files.
-  5. Generate a unique stored filename (UUID + original extension) for compatibility purposes.
-  6. Read the file's raw bytes and inspect the image header only (no full decode) to extract width/height, enforcing a maximum decoded-pixel-count limit (40M pixels) to prevent decompression-bomb denial-of-service; dimension extraction failures are non-fatal and the upload proceeds without dimensions.
-  7. Persist a new `Photo` entity (with binary content as a BLOB, metadata, and dimensions) via `PhotoRepository.save`.
-  8. Build a per-file `UploadResult` (success with new photo ID, or failure with a descriptive error).
-  9. Controller aggregates results across all files into a response distinguishing `uploadedPhotos` from `failedUploads`; overall `success` is true if at least one file uploaded successfully.
-- Business rules involved: file-type allow-list, max file-size limit, non-empty file requirement, decompression-bomb pixel-count limit (see Business Rules section).
+1. Any visitor requests `GET /`. `HomeController` loads photos via `PhotoServiceImpl` and `PhotoRepository` in newest-first upload order and renders gallery cards, or an empty-gallery message when there are no results. If loading throws, it logs the error and renders an empty list.
+2. The visitor opens `GET /detail/{id}`. `DetailController` resolves the Photo and queries the nearest older and newer photos by upload time. It renders metadata and navigation links only for neighbors found; a missing photo, invalid blank ID or retrieval exception redirects to the gallery.
+3. Gallery and detail images trigger separate `GET /photo/{id}` requests. `PhotoFileController` retrieves the Photo and returns its stored bytes with the photo's MIME type and no-cache headers. A missing photo or empty image data produces 404; an exception produces 500.
 
-### Workflow 3: View Photo Detail with Navigation
+### Workflow 3: Delete a Photo
 
-- Entry point: `GET /detail/{id}` (`DetailController.detail`)
-- Flow: Look up the photo by ID; if missing, redirect to the gallery home. Otherwise, load the photo plus its "previous" (older) and "next" (newer) neighbors via `PhotoService.getPreviousPhoto`/`getNextPhoto`, which query photos strictly before/after the current photo's `uploadedAt` timestamp, ordered to pick the single nearest neighbor. Renders the detail view with prev/next links for chronological browsing.
-
-### Workflow 4: Serve Photo Binary
-
-- Entry point: `GET /photo/{id}` (`PhotoFileController.servePhoto`)
-- Flow: Look up the photo by ID; if not found or its BLOB data is empty, return 404. Otherwise stream the binary content back with its stored MIME type and aggressive no-cache headers (ensuring browsers always fetch the latest version, e.g., after a delete/re-upload with a reused path).
-
-### Workflow 5: Delete Photo
-
-- Entry point: `POST /detail/{id}/delete` (`DetailController.deletePhoto`), requires authentication (see Business Rules).
-- Flow: Look up the photo by ID; if found, delete it from the database and set a success flash message; if not found, set an error flash message. Always redirects back to the gallery home page.
+An authenticated user confirms deletion in the detail page and submits `POST /detail/{id}/delete`. `DetailController` asks `PhotoServiceImpl` to find and remove the Photo via `PhotoRepository`. It redirects to the gallery with a success message when deleted, a not-found message when absent, or an error message if deletion throws. Since bytes belong to the same Photo record, deletion removes the image content as well.
 
 ## Cross-Service Data Flows
 
-Not applicable — this is a single-module monolithic application with no service-to-service composition, gateway aggregation, or circuit-breaker fallback behavior. All workflows execute entirely within one Spring Boot process against a single Oracle database.
+No cross-service business data composition or circuit breaker exists. Within the application, controllers combine Photo data from `PhotoServiceImpl`: upload results are enriched with saved-photo metadata, the detail page combines the selected Photo with its chronological neighbors, and the browser loads image bytes separately by Photo ID. PostgreSQL is the source of truth for both image bytes and display metadata. A failed gallery read renders an empty gallery rather than a partial result from another service; failed image reads return 404 or 500 as described above. There is no cross-service fallback.
 
 ## Business Workflow Sequence
 
 ```mermaid
 sequenceDiagram
-    participant User
-    participant Home as "Home Controller"
+    actor Visitor
+    participant Home as "Gallery Controller"
     participant Svc as "Photo Service"
+    participant Photo as "Photo Aggregate"
     participant Repo as "Photo Repository"
-    participant DB as "Oracle Database"
-    participant FileCtl as "Photo File Controller"
+    participant DB as "Photo Database"
+    participant Image as "Image Controller"
 
-    User->>Home: Upload photo file(s)
-    Home->>Svc: uploadPhoto(file)
-    alt File type not allowed
-        Svc-->>Home: Upload failed - unsupported file type
-    else File exceeds size limit
-        Svc-->>Home: Upload failed - file too large
-    else File is empty
-        Svc-->>Home: Upload failed - empty file
-    else Valid file
-        Svc->>Svc: Read image header, enforce max pixel count (anti decompression-bomb)
-        alt Image dimensions exceed limit
-            Svc-->>Home: Upload failed - dimensions exceed limit
-        else Within limits
-            Svc->>Repo: save(Photo with BLOB data)
-            Repo->>DB: INSERT photo record
+    Visitor->>Home: Submit selected photos
+    Note over Home: Upload requires authentication
+    loop For each file
+        Home->>Svc: Attempt photo upload
+        Svc->>Svc: Check upload rules and image dimensions
+        alt File rejected or unreadable
+            Svc-->>Home: Failed upload with reason
+        else File accepted
+            Svc->>Photo: Create photo with bytes and metadata
+            Svc->>Repo: Save photo
+            Repo->>DB: Persist photo and image bytes
             DB-->>Repo: Saved photo
-            Repo-->>Svc: Photo with generated ID
-            Svc-->>Home: Upload succeeded (photoId)
+            Repo-->>Svc: Saved photo
+            Svc-->>Home: Successful upload identifier
+            Home->>Svc: Load saved photo for response
+            Svc->>Repo: Find photo by identifier
+            Repo->>DB: Read photo
+            DB-->>Repo: Photo
+            Repo-->>Svc: Photo
+            Svc-->>Home: Photo metadata
         end
     end
-    Home-->>User: Upload summary (uploaded vs failed files)
-
-    User->>Home: View gallery (GET /)
-    Home->>Svc: getAllPhotos()
-    Svc->>Repo: findAllOrderByUploadedAtDesc()
-    Repo->>DB: SELECT photos ORDER BY uploaded_at DESC
+    Home-->>Visitor: Uploaded and failed photos
+    Visitor->>Home: Browse gallery
+    Home->>Svc: List newest photos first
+    Svc->>Repo: Find photos by upload time
+    Repo->>DB: Read gallery photos
     DB-->>Repo: Photo list
     Repo-->>Svc: Photo list
     Svc-->>Home: Photo list
-    Home-->>User: Rendered photo gallery
-
-    User->>FileCtl: Request photo binary (GET /photo/{id})
-    FileCtl->>Svc: getPhotoById(id)
-    Svc->>Repo: findById(id)
-    Repo->>DB: SELECT photo by id
-    DB-->>Repo: Photo (with BLOB)
-    Repo-->>Svc: Photo
-    Svc-->>FileCtl: Photo
-    alt Photo not found or no BLOB data
-        FileCtl-->>User: 404 Not Found
-    else Photo found
-        FileCtl-->>User: Photo bytes with mime type, no-cache headers
+    Home-->>Visitor: Gallery with photo identifiers
+    Visitor->>Image: View a gallery image
+    Image->>Svc: Find photo by identifier
+    Svc->>Repo: Read photo
+    Repo->>DB: Find photo and bytes
+    DB-->>Repo: Photo or no match
+    Repo-->>Svc: Photo or no match
+    Svc-->>Image: Photo or no match
+    alt Photo and image bytes available
+        Image-->>Visitor: Image bytes and media type
+    else Photo missing or bytes empty
+        Image-->>Visitor: Image not found
     end
 ```
 
 ## Business Rules & Decision Logic
 
-**Validation rules (upload):**
-- MIME type allow-list check: only configured content types (JPEG, PNG, GIF, WebP) are accepted; all others are rejected with a descriptive error.
-- Max file size check: files larger than `app.file-upload.max-file-size-bytes` are rejected.
-- Non-empty file check: zero-length files are rejected.
-- Decompression-bomb guard: image dimensions are read from the file header only (not a full decode); if width × height exceeds 40,000,000 pixels, the upload is rejected before any full image decoding occurs.
-
-**State transitions:**
-- Photo lifecycle is simple: Created (on successful upload) → Deleted (on delete). There is no "edit"/"update" workflow — photos are immutable once uploaded.
-
-**Business constraints:**
-- Photo IDs are system-generated UUIDs, guaranteeing uniqueness without relying on user input.
-- Chronological ordering (`uploadedAt`) drives both gallery listing (newest first) and detail-page prev/next navigation (nearest neighbor by timestamp).
-
-**Computed values:**
-- Image width/height are derived (not user-supplied) by inspecting the uploaded file's header at upload time.
-- Stored filename is derived from a generated UUID plus the original file extension, decoupled from the user-supplied original filename (used only for display).
-
-**Authorization:**
-- State-changing operations (`POST /upload`, `POST /detail/{id}/delete`) require HTTP Basic authentication against a single in-memory admin account (credentials from environment variables, not hard-coded).
-- All read operations (gallery listing, photo detail view, photo binary serving) are publicly accessible without authentication.
-- Authentication is stateless (no server-side session); CSRF protection is disabled since there is no session-based token to protect and Basic auth is used per-request.
-
-**Error handling:**
-- Gallery listing degrades to an empty list on unexpected errors rather than failing the page.
-- Detail view and delete operations redirect back to the gallery home with a flash error message on failure, rather than showing a raw error page.
-- Photo-serving and repository-level errors are logged and surfaced as HTTP error responses (404/500) without leaking internal details to the client.
-
-**Audit/logging:**
-- Upload rejections (invalid type, oversized, invalid dimensions), successful uploads, deletions, and retrieval errors are logged with contextual details (filename, size, photo ID) for traceability.
-
-**Transactions:**
-- The service layer is transactional (`@Transactional`), with read-only transactions for query operations (`getAllPhotos`, `getPhotoById`, prev/next navigation) and read-write transactions for upload and delete.
+- **Upload validation:** The browser accepts JPEG, PNG, GIF and WebP and screens files larger than 10 MB. The service enforces its configured MIME allow-list (case-insensitive on the submitted type), maximum size (default 10 MiB), nonempty file size and a maximum of 40 million image pixels when dimensions can be read. Unreadable file bytes fail the upload; inability to extract dimensions without an I/O error can still result in a saved photo without dimensions. Multipart request limits are 10 MB per file and 50 MB per request. A configured `max-files-per-upload` setting exists but is not enforced in the controller or service.
+- **Photo integrity and lifecycle:** Creation assigns a unique Photo ID and upload time; an additional unique stored filename and compatibility path are generated, but images are served from the Photo's stored bytes. A Photo is either saved or absent/deleted; there are no approval or publication states and no relationships to maintain.
+- **Ordering and derived display values:** Gallery order is descending by upload time. Detail navigation uses strictly earlier upload times for the nearest older photo and strictly later times for the nearest newer photo; photos with identical timestamps are not neighbors under these queries. The UI formats upload time and file size and shows dimensions only when available.
+- **Batch decisions and errors:** Files are attempted independently. Invalid files yield per-file errors and do not block other uploads. Empty file lists return a bad-request response; missing detail photos redirect home, missing/depleted image data returns 404, and deletion of an absent photo produces a not-found flash message. A failed image retrieval returns 500, while a gallery retrieval failure is logged and displayed as an empty list. Service upload read/save errors are logged and converted to failed results.
+- **Transactions and access:** Photo service methods run in a transaction, with read-only transactions for listing, lookup and navigation; there is no distributed transaction or compensation across files. Gallery, detail and image requests are public. Upload and deletion require authentication through HTTP Basic with an in-memory admin account, but there is no per-photo ownership rule. Upload and deletion events and errors are logged; no domain event stream or dedicated audit history is implemented.
